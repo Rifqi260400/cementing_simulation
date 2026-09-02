@@ -186,8 +186,25 @@ def test_radial_weights_tile_each_annulus_exactly():
     W, _ = g._radial_weights()
     edges = np.linspace(0.0, R, 33)
     np.testing.assert_allclose(
-        np.cumsum(W.sum(axis=0)), math.pi * edges[1:] ** 2, rtol=1e-13
+        np.cumsum(np.asarray(W.sum(axis=0)).ravel()), math.pi * edges[1:] ** 2, rtol=1e-13
     )
+
+
+def test_radial_weights_rows_sum_to_the_cell_areas():
+    """Every cell's annular weights must add back up to its own area."""
+    g = make_grid(13, 18, n_radial=128)
+    W, _ = g._radial_weights()
+    np.testing.assert_allclose(
+        np.asarray(W.sum(axis=1)).ravel(), g.cell_area.ravel(), rtol=1e-12
+    )
+
+
+def test_radial_weight_matrix_is_sparse():
+    """The sparsity is the point: each cell spans only a slice of the radius."""
+    g = make_grid(26, 36, n_radial=512)
+    W, _ = g._radial_weights()
+    density = W.nnz / (W.shape[0] * W.shape[1])
+    assert density < 0.15, f"weight matrix is {100 * density:.1f} % dense"
 
 
 def test_radial_weight_mapping_is_second_order_in_n_radial():

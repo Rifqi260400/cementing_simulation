@@ -162,8 +162,10 @@ def velocity_profile(r, fluid: Fluid, R: float, tau_w: float):
     u = A * (T / fluid.k) ** exponent + B
 
     # Enforce the no-slip identity exactly at the wall.  Analytically
-    # A*(T(R)/k)**e + B == 0; this only removes round-off.
-    u = np.where(np.isclose(r_arr, R, rtol=0.0, atol=1e-15), 0.0, u)
+    # A*(T(R)/k)**e + B == 0; this only removes round-off.  A plain comparison
+    # is used rather than np.isclose: this runs on every profile evaluation in
+    # the time loop.
+    u = np.where(r_arr >= R - 1e-15, 0.0, u)
     return u if u.ndim else float(u)
 
 

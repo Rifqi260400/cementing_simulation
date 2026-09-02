@@ -170,6 +170,7 @@ def advect(
     face_scheme="upwind",
     inlet_value=0.0,
     divergence_correction: bool = True,
+    u_faces: np.ndarray | None = None,
 ) -> np.ndarray:
     """One explicit Euler step of axial advection.
 
@@ -189,36 +190,45 @@ def advect(
         ``s``; for volume fractions see the transverse closures in
         :func:`advect_multi` (assumption A-07).
 
+    u_faces : optional precomputed ``(n_axial + 1, ...)`` face velocity stack
+        from :func:`face_velocity_stack`.  Pass it when advecting several
+        fields with the same velocity field, so the faces are built once.
+
     The update needs no cell area: for a uniform-ID pipe the same area divides
     out of the face flux and the cell volume.
 
     Returns the updated field; ``f`` is not modified.
     """
     scheme = resolve_face_scheme(face_scheme)
-    u_cells = np.broadcast_to(np.asarray(u_cells, dtype=float), f.shape)
+    if u_faces is None:
+        u_cells = np.broadcast_to(np.asarray(u_cells, dtype=float), f.shape)
+        u_faces = face_velocity_stack(u_cells)
+    return _advect_with_faces(
+        f, u_faces, dz, dt, scheme, inlet_value, divergence_correction
+    )
 
-    u_int = _face_velocities(u_cells)
-    f_int = scheme(f, u_int, dz, dt)
 
+def _advect_with_faces(f, uf, dz, dt, scheme, inlet_value, divergence_correction):
+    """The update itself, given a precomputed face velocity stack ``uf``.
+
+    Face values are written into one preallocated buffer rather than
+    concatenated, so advecting several fields with a shared ``uf`` costs one
+    allocation per field instead of three.
+    """
     # Boundary faces (assumption A-18).  Inlet at z = 0: Dirichlet on inflow,
     # upwind on outflow.  Outlet at z = L: zero-gradient in both directions, so
     # a reversed outlet face draws the last cell's own composition rather than
     # injecting anything new.
-    u_in = u_cells[0]
-    u_out = u_cells[-1]
-    f_in = np.where(u_in >= 0.0, np.broadcast_to(inlet_value, u_in.shape), f[0])
-    f_out = f[-1]
-
-    # Assemble face velocities and face values including boundaries.
-    uf = np.concatenate([u_in[None, ...], u_int, u_out[None, ...]], axis=0)
-    ff = np.concatenate([f_in[None, ...], f_int, f_out[None, ...]], axis=0)
+    ff = np.empty_like(uf)
+    ff[1:-1] = scheme(f, uf[1:-1], dz, dt)
+    ff[0] = np.where(uf[0] >= 0.0, inlet_value, f[0])
+    ff[-1] = f[-1]
 
     flux = uf * ff  # per unit area; the area cancels for a uniform-ID pipe
     div_flux = (flux[1:] - flux[:-1]) / dz
 
     if divergence_correction:
-        div_u = (uf[1:] - uf[:-1]) / dz
-        div_flux = div_flux - f * div_u
+        div_flux -= f * ((uf[1:] - uf[:-1]) / dz)
 
     return f - dt * div_flux
 
@@ -240,6 +250,7 @@ def advect_multi(
     inlet_values=None,
     closure: str = "redistribute",
     area: np.ndarray | None = None,
+    u_faces: np.ndarray | None = None,
 ) -> np.ndarray:
     """Advect a stack of volume fractions, ``(n_fluids, n_axial, n_layer, n_azimuth)``.
 
@@ -257,22 +268,26 @@ def advect_multi(
             "expected 'none', 'local' or 'redistribute'"
         )
 
+    if closure == "redistribute" and area is None:
+        raise ValueError("closure='redistribute' needs the cell area array")
+
+    # Build the face velocities once and share them across every fluid and the
+    # redistribution step, rather than rebuilding them per field.
+    if u_faces is None:
+        u_cells = np.broadcast_to(np.asarray(u_cells, dtype=float), fields.shape[1:])
+        u_faces = face_velocity_stack(u_cells)
+
+    scheme = resolve_face_scheme(face_scheme)
     out = np.empty_like(fields)
     for i in range(n_fluids):
-        out[i] = advect(
-            fields[i], u_cells, dz, dt,
-            face_scheme=face_scheme,
-            inlet_value=inlet_values[i],
+        out[i] = _advect_with_faces(
+            fields[i], u_faces, dz, dt, scheme, inlet_values[i],
             divergence_correction=(closure == "local"),
         )
     if closure != "redistribute":
         return out
 
-    if area is None:
-        raise ValueError("closure='redistribute' needs the cell area array")
-    u_cells = np.broadcast_to(np.asarray(u_cells, dtype=float), fields.shape[1:])
-    uf = face_velocity_stack(u_cells)
-    div_u = (uf[1:] - uf[:-1]) / dz  # (n_axial, n_layer, n_azimuth)
+    div_u = (u_faces[1:] - u_faces[:-1]) / dz  # (n_axial, n_layer, n_azimuth)
     return _apply_transverse_redistribution(out, fields, div_u, area, dt)
 
 
@@ -292,8 +307,8 @@ def _apply_transverse_redistribution(
     guarantees (assumption A-22).  Without it the mapped velocities integrate to
     ``Q`` only to ~4e-6, and this closure conserves only to the same order.
     """
-    donor = np.where(div_u < 0.0, -div_u, 0.0)  # lateral outflow rate
-    receiver = np.where(div_u > 0.0, div_u, 0.0)  # lateral inflow rate
+    donor = np.clip(-div_u, 0.0, None)  # lateral outflow rate
+    receiver = np.clip(div_u, 0.0, None)  # lateral inflow rate
 
     w = donor * area  # (n_axial, n_layer, n_azimuth)
     supply = w.sum(axis=(1, 2))  # per station
@@ -305,8 +320,8 @@ def _apply_transverse_redistribution(
     cup = np.einsum("iklm,klm->ik", fields, w)
     cup[:, active] /= supply[active]
 
-    out = out - dt * donor[None, ...] * fields
-    out = out + dt * receiver[None, ...] * cup[:, :, None, None]
+    out -= dt * donor[None, ...] * fields
+    out += dt * receiver[None, ...] * cup[:, :, None, None]
     return out
 
 

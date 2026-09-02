@@ -311,7 +311,7 @@ class Grid:
         """
         W, r_nodes = self._radial_weights()
         u_nodes = np.asarray(profile(r_nodes), dtype=float)
-        integrals = W @ u_nodes
+        integrals = np.asarray(W @ u_nodes).ravel()
         out = np.zeros(self.cross_section_shape)
         area = self.cell_area
         good = area > 0.0
@@ -370,7 +370,12 @@ class Grid:
                 elif abs(prev - full) > 1e-12 * full:  # pragma: no cover
                     W[c, m - 1] += full - prev
 
-        self._radial_cache = (W, r_nodes)
+        # W is mostly zeros - each cell spans only a slice of the radius - so a
+        # sparse matrix cuts both the memory and the matvec cost, which is what
+        # dominates the velocity mapping at fine cross-sections.
+        from scipy.sparse import csr_matrix
+
+        self._radial_cache = (csr_matrix(W), r_nodes)
         return self._radial_cache
 
     def _area_averaged_velocity_quadrature(

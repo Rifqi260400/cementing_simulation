@@ -30,6 +30,7 @@ from .fluid import Fluid, PumpSchedule, mix_fluids
 from .grid import Grid
 from .transport import (
     advect,
+    face_velocity_stack,
     advect_multi,
     assert_cfl,
     cfl_timestep,
@@ -307,6 +308,9 @@ class InPipeSolver:
         self._outlet_time.append(self.t)
         self._outlet_fractions.append(outlet_mean)
 
+        # One face-velocity stack, shared by every fluid, the redistribution
+        # step and the mixing-status advection.
+        u_faces = face_velocity_stack(u)
         self.f = advect_multi(
             self.f,
             u,
@@ -316,6 +320,7 @@ class InPipeSolver:
             inlet_values=inlet_values,
             closure=num.transverse_closure,
             area=self.grid.cell_area,
+            u_faces=u_faces,
         )
         # The mixing status advects with the same kernel and scheme.  Nothing
         # sets s = 1 in Phase 1 (assumption A-17); the inlet carries s = 0.
@@ -328,6 +333,7 @@ class InPipeSolver:
             inlet_value=0.0,
             # Eq. A.20 is stated in advective form, so s always uses it.
             divergence_correction=True,
+            u_faces=u_faces,
         )
 
         self.t += dt
