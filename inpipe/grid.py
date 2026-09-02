@@ -183,6 +183,15 @@ def layer_boundaries(n_layer: int, R: float, rule: str = "uniform_y") -> np.ndar
     raise ValueError(f"unknown layer rule {rule!r}")
 
 
+def _box_radial_extent(xa: float, xb: float, y_lo: float, y_hi: float):
+    """Min and max distance from the origin to the box ``[xa,xb] x [y_lo,y_hi]``."""
+    dx = 0.0 if xa <= 0.0 <= xb else min(abs(xa), abs(xb))
+    dy = 0.0 if y_lo <= 0.0 <= y_hi else min(abs(y_lo), abs(y_hi))
+    r_min = math.hypot(dx, dy)
+    r_max = math.hypot(max(abs(xa), abs(xb)), max(abs(y_lo), abs(y_hi)))
+    return r_min, r_max
+
+
 def _layer_half_width(y_lo: float, y_hi: float, R: float) -> float:
     """Maximum ``|x|`` reached by the layer inside the disc."""
     if y_lo <= 0.0 <= y_hi:
@@ -332,9 +341,18 @@ class Grid:
                 xa = self.x_layer_faces[i, j]
                 xb = self.x_layer_faces[i, j + 1]
                 c = i * self.n_azimuth + j
+                full = self.cell_area[i, j]
+                if full <= 0.0:
+                    continue
+                # Radial extent of the box: bins entirely inside contribute
+                # nothing beyond the cell's full area, bins entirely outside
+                # contribute nothing at all, so only the overlap is computed.
+                r_min, r_max = _box_radial_extent(xa, xb, y_lo, y_hi)
+                k_lo = max(int(np.searchsorted(edges, r_min, side="right")) - 1, 0)
+                k_hi = min(int(np.searchsorted(edges, r_max, side="left")), m)
                 # Cumulative area of the cell inside the disc of radius r.
                 prev = 0.0
-                for k in range(m):
+                for k in range(k_lo, k_hi):
                     r_out = edges[k + 1]
                     # Cell clipped to the disc of radius r_out.  Layer cut
                     # lines are clipped to that disc as well, which is exactly
@@ -346,6 +364,11 @@ class Grid:
                     )
                     W[c, k] = cur - prev
                     prev = cur
+                # Everything beyond r_max is the remainder of the cell.
+                if k_hi < m:
+                    W[c, k_hi] += full - prev
+                elif abs(prev - full) > 1e-12 * full:  # pragma: no cover
+                    W[c, m - 1] += full - prev
 
         self._radial_cache = (W, r_nodes)
         return self._radial_cache

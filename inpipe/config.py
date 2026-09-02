@@ -155,10 +155,14 @@ class NumericsConfig:
     sum_to_one_atol: float = 1.0e-12
     #: Absolute tolerance on the 0 <= f_i <= 1 boundedness constraint.
     boundedness_atol: float = 1.0e-12
-    #: Apply the discrete divergence correction to the VOF update so that
-    #: sum_i f_i = 1 is preserved when the axial velocity profile varies with
-    #: depth (mixed rheology).  See A-07.
-    divergence_correction: bool = True
+    #: Transverse closure for the VOF update when the axial velocity profile
+    #: varies with depth (mixed rheology).  One of "redistribute" (default),
+    #: "local" or "none".  See A-07 and the transport module docstring.
+    transverse_closure: str = "redistribute"
+    #: Rescale each station's mapped velocity field so that sum_cells u*A equals
+    #: the imposed Q exactly.  This makes the discrete continuity condition
+    #: exact, which is what lets "redistribute" conserve to round-off.  See A-22.
+    enforce_discrete_continuity: bool = True
     #: Velocity mapping strategy from the 1D profile onto 3D cells.  See A-04.
     #: "centroid" evaluates u at the cell centroid radius; it exceeds the 1 %
     #: flow-rate gate for yield-stress fluids at the paper's own 13 x 18

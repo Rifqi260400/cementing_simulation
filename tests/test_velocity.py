@@ -14,6 +14,7 @@ from inpipe.fluid import Fluid
 from inpipe.velocity import (
     NoBracketError,
     flow_rate,
+    flow_rate_quad,
     plug_radius,
     pressure_gradient,
     solve_profile,
@@ -163,3 +164,47 @@ def test_flow_rate_monotone_in_tau_w():
     taus = np.linspace(3.001, 60.0, 40)
     qs = [flow_rate(fluid, R, t) for t in taus]
     assert np.all(np.diff(qs) > 0.0)
+
+
+@pytest.mark.parametrize(
+    "fluid",
+    [
+        Fluid.newtonian(1000.0, 0.001),
+        Fluid.power_law(1000.0, k=0.8, n=0.4),
+        Fluid.power_law(1000.0, k=0.2, n=1.0),
+        Fluid.bingham(1500.0, mu_p=0.03, tau0=4.0),
+        Fluid("hb", rho=1400.0, tau0=3.0, k=0.6, n=0.55),
+        Fluid("cement", rho=1870.0, tau0=6.0, k=0.55, n=0.65),
+    ],
+)
+def test_closed_form_flow_rate_matches_quadrature(fluid):
+    """The closed-form Q(tau_w) equals the spec's quadrature to rel 1e-10.
+
+    This is the check that licenses the deviation logged as A-01: the closed
+    form is used in the hot path, the quadrature stands as the independent
+    reference.
+    """
+    for offset in (1e-6, 0.5, 5.0, 50.0, 500.0):
+        tau_w = fluid.tau0 + offset
+        assert flow_rate(fluid, R, tau_w) == pytest.approx(
+            flow_rate_quad(fluid, R, tau_w), rel=1e-10
+        )
+
+
+def test_closed_form_reduces_to_hagen_poiseuille():
+    mu = 0.002
+    fluid = Fluid.newtonian(1000.0, mu)
+    for tau_w in (0.1, 1.0, 25.0):
+        assert flow_rate(fluid, R, tau_w) == pytest.approx(
+            math.pi * R**3 * tau_w / (4.0 * mu), rel=1e-14
+        )
+
+
+@pytest.mark.parametrize("n", [0.3, 0.5, 0.8, 1.0, 1.2])
+def test_closed_form_reduces_to_the_power_law_result(n):
+    """Q = pi R^3 n/(3n+1) (tau_w/k)^(1/n) for tau0 = 0."""
+    k = 0.7
+    fluid = Fluid.power_law(1000.0, k=k, n=n)
+    for tau_w in (0.5, 10.0, 200.0):
+        want = math.pi * R**3 * n / (3.0 * n + 1.0) * (tau_w / k) ** (1.0 / n)
+        assert flow_rate(fluid, R, tau_w) == pytest.approx(want, rel=1e-13)

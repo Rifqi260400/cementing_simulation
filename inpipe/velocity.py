@@ -53,6 +53,7 @@ __all__ = [
     "plug_radius",
     "velocity_profile",
     "flow_rate",
+    "flow_rate_quad",
     "solve_tau_w",
     "pressure_gradient",
 ]
@@ -172,13 +173,54 @@ def velocity_profile(r, fluid: Fluid, R: float, tau_w: float):
 
 
 def flow_rate(fluid: Fluid, R: float, tau_w: float) -> float:
-    """``Q = int_0^R u(r) 2 pi r dr`` [m^3/s] (paper Eq. A.2).
+    """``Q = int_0^R u(r) 2 pi r dr`` [m^3/s] (paper Eq. A.2), in closed form.
+
+    Integrating Eq. A.2 by parts (``u(R) = 0``) gives ``Q = pi int_0^R r^2
+    (-du/dr) dr``.  Substituting ``T = tau_w r / R - tau0`` turns that into an
+    elementary integral of ``(T + tau0)^2 (T/k)^(1/n)``, which evaluates to
+
+        Q = pi R^3 * (Tm/k)^(1/n) * a
+            * [ a^2 * n/(3n+1) + 2 x a * n/(2n+1) + x^2 * n/(n+1) ]
+
+    with ``Tm = T(R) = tau_w - tau0``, ``x = tau0/tau_w`` and ``a = 1 - x``.
+    Writing it in terms of the stress ratio rather than dividing by
+    ``tau_w**3`` keeps it well conditioned down to arbitrarily small
+    ``tau_w``, which the root-find bracket relies on.  This is exact for Herschel-Bulkley and
+    collapses to Hagen-Poiseuille (``n = 1``, ``tau0 = 0``), to the power-law
+    result, and to Buckingham-Reiner (``n = 1``).
+
+    [DEVIATION FROM SPEC, A-01] The build spec chose adaptive quadrature split
+    at the plug radius.  That is correct, but the ``tau_w`` root find sits
+    inside the time loop at every station holding mixed fluids, where the
+    quadrature version dominated the field-scale runtime.  It is retained as
+    :func:`flow_rate_quad` and the two are asserted equal across rheologies in
+    ``tests/test_velocity.py``.
+    """
+    if tau_w <= fluid.tau0:
+        return 0.0
+
+    n, k, tau0 = fluid.n, fluid.k, fluid.tau0
+    Tm = tau_w - tau0
+    x = tau0 / tau_w  # stress ratio, 0 for a fluid without yield stress
+    a = 1.0 - x
+    bracket = (
+        a * a * n / (3.0 * n + 1.0)
+        + 2.0 * x * a * n / (2.0 * n + 1.0)
+        + x * x * n / (n + 1.0)
+    )
+    return math.pi * R**3 * (Tm / k) ** (1.0 / n) * a * bracket
+
+
+def flow_rate_quad(fluid: Fluid, R: float, tau_w: float) -> float:
+    """Reference ``Q(tau_w)`` by adaptive quadrature - the build spec's choice.
 
     [OUR CHOICE, A-01] The integral is split at the plug radius ``r0``: the
     plug contributes analytically (``B * pi * r0**2``) and the sheared annulus
     ``r in [r0, R]`` is integrated numerically with ``scipy.integrate.quad``.
     Splitting at ``r0`` keeps the integrand smooth on each piece; the
     derivative of ``u`` is discontinuous there.
+
+    Kept as the independent check on the closed form in :func:`flow_rate`.
     """
     if tau_w <= fluid.tau0:
         return 0.0
@@ -231,7 +273,20 @@ def solve_tau_w(
     if q_target == 0.0:
         return fluid.tau0
 
-    lo = fluid.tau0 * (1.0 + _TAU_W_BRACKET_EPS) if fluid.tau0 > 0.0 else 1e-300
+    hi = _initial_upper_bracket(fluid, R, q_target)
+
+    # Lower bracket: just above the yield stress, below which there is no flow
+    # at all.  For a fluid without yield stress there is no such floor, so the
+    # bracket is scaled off the analytical guess and shrunk until the residual
+    # is negative.
+    if fluid.tau0 > 0.0:
+        lo = fluid.tau0 * (1.0 + _TAU_W_BRACKET_EPS)
+    else:
+        lo = hi * 1.0e-8
+        for _ in range(_BRACKET_MAX_ITER):
+            if flow_rate(fluid, R, lo) - q_target < 0.0:
+                break
+            lo *= 1.0e-4
     f_lo = flow_rate(fluid, R, lo) - q_target
     if f_lo > 0.0:  # pragma: no cover - defensive
         raise NoBracketError(
@@ -239,7 +294,6 @@ def solve_tau_w(
             f"(tau_w={lo:.6g} Pa, residual={f_lo:.6g} m3/s)"
         )
 
-    hi = _initial_upper_bracket(fluid, R, q_target)
     for _ in range(_BRACKET_MAX_ITER):
         if flow_rate(fluid, R, hi) - q_target > 0.0:
             break

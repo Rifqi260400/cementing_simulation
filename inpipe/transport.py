@@ -21,16 +21,36 @@ finite-volume update (assumption A-14) is::
 
 with outward-positive face normals, integrated in time with explicit Euler.
 
-Divergence correction (assumption A-07)
----------------------------------------
+Transverse closure (assumption A-07)
+------------------------------------
 The conservative update preserves ``sum_i f_i = 1`` only when the discrete
-continuity condition ``sum_j u_j A_j = 0`` holds per cell.  In this model it
-does *not* in general: when neighbouring depth stations hold different
-effective fluids, their velocity profiles differ, so a column has
-``du/dz != 0`` even though the total ``Q`` is constant.  Subtracting
-``f_i^n * sum_j u_j A_j`` restores the advective form of Eq. (2) and with it
-sum-to-one.  The correction vanishes identically for a depth-uniform profile,
-so it changes nothing in the single-rheology cases.
+continuity condition ``sum_j u_j A_j = 0`` holds per *cell*.  In this model it
+does not: when neighbouring depth stations hold different effective fluids,
+their velocity profiles differ, so a column has ``du/dz != 0`` even though the
+total ``Q`` is constant.  Three closures are available, and the field-scale
+numbers below are why the third is the default:
+
+``"none"``
+    Eq. A.9 exactly as printed.  Conserves each fluid's volume to round-off but
+    loses sum-to-one badly: on the 200 m case ``max |sum_i f_i - 1| = 0.39``,
+    with ``f`` reaching 1.10.  The fractions stop being a partition of the cell.
+``"local"``
+    Subtract ``f_i * div(u)``, i.e. use the advective form of Eq. (2).
+    Sum-to-one holds to 3e-14, but volume is created and destroyed locally:
+    1.8 % per-fluid error on the same case.
+``"redistribute"`` (default)
+    The column imbalance ``D_c = div(u)_c`` sums to zero over the cross-section
+    (the mapped velocities integrate to the same ``Q`` at every station), so it
+    is a *redistribution*, not a source.  Columns losing volume axially shed it
+    laterally carrying their own composition; columns gaining volume take in
+    the donor mixing-cup composition.  Both invariants then hold to round-off.
+
+    This is transverse redistribution *imposed algorithmically*, in the same
+    spirit as the paper's own segregation step - not a solved transverse
+    velocity.  Its physical content is an explicit assumption: lateral
+    redistribution is instantaneous and well-mixed across the section.  The
+    closure is identically inert when ``div(u) = 0``, so it changes nothing in
+    every single-rheology case.
 """
 
 from __future__ import annotations
@@ -47,6 +67,7 @@ __all__ = [
     "cfl_timestep",
     "advect",
     "advect_multi",
+    "face_velocity_stack",
     "check_sum_to_one",
     "check_bounded",
     "numerical_diffusivity",
@@ -200,6 +221,14 @@ def advect(
     return f - dt * div_flux
 
 
+def face_velocity_stack(u_cells: np.ndarray) -> np.ndarray:
+    """Axial face velocities including both boundaries, ``(n_axial + 1, ...)``."""
+    return np.concatenate(
+        [u_cells[0][None, ...], _face_velocities(u_cells), u_cells[-1][None, ...]],
+        axis=0,
+    )
+
+
 def advect_multi(
     fields: np.ndarray,
     u_cells: np.ndarray,
@@ -207,26 +236,71 @@ def advect_multi(
     dt: float,
     face_scheme="upwind",
     inlet_values=None,
-    divergence_correction: bool = True,
+    closure: str = "redistribute",
+    area: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Advect a stack of fields, ``(n_fluids, n_axial, n_layer, n_azimuth)``.
+    """Advect a stack of volume fractions, ``(n_fluids, n_axial, n_layer, n_azimuth)``.
 
-    ``inlet_values`` is a sequence of length ``n_fluids``.
+    ``inlet_values`` is a sequence of length ``n_fluids``.  ``closure`` selects
+    the transverse closure described in the module docstring; ``area`` is the
+    cell cross-sectional area, required by ``"redistribute"``.
     """
     fields = np.asarray(fields, dtype=float)
+    n_fluids = fields.shape[0]
     if inlet_values is None:
-        inlet_values = np.zeros(fields.shape[0])
+        inlet_values = np.zeros(n_fluids)
+    if closure not in ("none", "local", "redistribute"):
+        raise ValueError(
+            f"unknown transverse closure {closure!r}; "
+            "expected 'none', 'local' or 'redistribute'"
+        )
+
     out = np.empty_like(fields)
-    for i in range(fields.shape[0]):
+    for i in range(n_fluids):
         out[i] = advect(
-            fields[i],
-            u_cells,
-            dz,
-            dt,
+            fields[i], u_cells, dz, dt,
             face_scheme=face_scheme,
             inlet_value=inlet_values[i],
-            divergence_correction=divergence_correction,
+            divergence_correction=(closure == "local"),
         )
+    if closure != "redistribute":
+        return out
+
+    if area is None:
+        raise ValueError("closure='redistribute' needs the cell area array")
+    u_cells = np.broadcast_to(np.asarray(u_cells, dtype=float), fields.shape[1:])
+    uf = face_velocity_stack(u_cells)
+    div_u = (uf[1:] - uf[:-1]) / dz  # (n_axial, n_layer, n_azimuth)
+    return _apply_transverse_redistribution(out, fields, div_u, area, dt)
+
+
+def _apply_transverse_redistribution(
+    out: np.ndarray, fields: np.ndarray, div_u: np.ndarray, area: np.ndarray, dt: float
+) -> np.ndarray:
+    """Move the divergence-induced imbalance sideways instead of destroying it.
+
+    Per axial station, ``D_c = div(u)_c``.  Columns with ``D_c < 0`` gain volume
+    axially and must shed it laterally, carrying their own composition; columns
+    with ``D_c > 0`` must take volume in, and receive the donor mixing-cup
+    composition.  Because ``sum_c D_c A_c = 0`` the exchange balances exactly,
+    so every fluid's total volume and the partition ``sum_i f_i = 1`` are both
+    preserved to round-off.
+    """
+    donor = np.where(div_u < 0.0, -div_u, 0.0)  # lateral outflow rate
+    receiver = np.where(div_u > 0.0, div_u, 0.0)  # lateral inflow rate
+
+    w = donor * area  # (n_axial, n_layer, n_azimuth)
+    supply = w.sum(axis=(1, 2))  # per station
+    active = supply > 0.0
+    if not np.any(active):
+        return out
+
+    # Donor mixing-cup composition per station, (n_fluids, n_axial).
+    cup = np.einsum("iklm,klm->ik", fields, w)
+    cup[:, active] /= supply[active]
+
+    out = out - dt * donor[None, ...] * fields
+    out = out + dt * receiver[None, ...] * cup[:, :, None, None]
     return out
 
 

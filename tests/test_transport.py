@@ -93,9 +93,11 @@ def test_sum_to_one_every_step():
     fields[1, 60:130] = 1.0
     fields[2, 130:] = 1.0
     u = np.full(column(nz), 0.5)
+    area = np.ones((1, 1))
     dt = CFL * DZ / 0.5
     for _ in range(300):
-        fields = advect_multi(fields, u, DZ, dt, inlet_values=[1.0, 0.0, 0.0])
+        fields = advect_multi(fields, u, DZ, dt, inlet_values=[1.0, 0.0, 0.0],
+                              area=area)
         assert check_sum_to_one(fields, atol=1e-12) <= 1e-12
         check_bounded(fields, atol=1e-12)
 
@@ -189,10 +191,9 @@ def test_divergence_correction_restores_sum_to_one_under_depth_varying_velocity(
     raw = fields.copy()
     corrected = fields.copy()
     for _ in range(100):
-        raw = advect_multi(raw, u, DZ, dt, inlet_values=[1.0, 0.0],
-                           divergence_correction=False)
+        raw = advect_multi(raw, u, DZ, dt, inlet_values=[1.0, 0.0], closure="none")
         corrected = advect_multi(corrected, u, DZ, dt, inlet_values=[1.0, 0.0],
-                                 divergence_correction=True)
+                                 closure="local")
 
     raw_err = float(np.max(np.abs(raw.sum(axis=0) - 1.0)))
     corr_err = float(np.max(np.abs(corrected.sum(axis=0) - 1.0)))
@@ -332,3 +333,100 @@ def test_numerical_diffusion_falls_linearly_with_dz():
 def test_paper_scale_estimate_reproduces_their_quoted_number():
     """dx = 30 m, dt = 0.1 min -> 150 m^2/s, as Dai et al. state."""
     assert numerical_diffusivity(30.0, 6.0) == pytest.approx(150.0, rel=1e-12)
+
+
+# --- the redistribute closure (assumption A-07) ----------------------------
+
+
+def _divergent_case(nz=120, n_layer=3, n_azimuth=4):
+    """Depth-varying profile *shape* at depth-constant total Q.
+
+    This is what a depth-varying effective rheology produces: every station
+    passes the same Q, but the profile is peakier at some depths than others,
+    so an individual column has du/dz != 0.  A merely depth-varying *magnitude*
+    would not do - normalising to a common Q would flatten it back out.
+    """
+    area = np.array([[1.0, 2, 3, 4], [2, 3, 4, 5], [1, 1, 1, 1]])[:n_layer, :n_azimuth]
+    # Two profile shapes: near-plug and strongly peaked.
+    flat = np.ones((n_layer, n_azimuth))
+    peaked = np.zeros((n_layer, n_azimuth))
+    peaked[n_layer // 2] = 3.0
+    peaked += 0.2
+    z = np.arange(nz)
+    w = 0.5 * (1.0 - np.cos(2 * np.pi * z / nz))  # blends 0 -> 1 -> 0 with depth
+    u = (1.0 - w)[:, None, None] * flat + w[:, None, None] * peaked
+    q = 0.5 * float(area.sum())  # so that u is O(0.5) m/s
+    u *= (q / np.einsum("klm,lm->k", u, area))[:, None, None]
+    assert np.max(np.abs(np.einsum("klm,lm->k", u, area) - q)) < 1e-13 * q
+    assert np.max(np.abs(np.diff(u, axis=0))) > 1e-3 * np.max(u), "case is not divergent"
+    fields = np.zeros((2, nz, n_layer, n_azimuth))
+    fields[0, : nz // 2] = 1.0
+    fields[1] = 1.0 - fields[0]
+    return fields, u, area, q
+
+
+@pytest.mark.parametrize("closure", ["none", "local", "redistribute"])
+def test_all_closures_are_inert_for_a_uniform_profile(closure):
+    """No closure may change anything when div(u) = 0."""
+    nz = 100
+    fields = np.zeros((2, nz, 2, 2))
+    fields[0, :50] = 1.0
+    fields[1] = 1.0 - fields[0]
+    u = np.full((nz, 2, 2), 0.5)
+    area = np.ones((2, 2))
+    dt = CFL * DZ / 0.5
+    ref = advect_multi(fields, u, DZ, dt, inlet_values=[1.0, 0.0], closure="none")
+    got = advect_multi(fields, u, DZ, dt, inlet_values=[1.0, 0.0],
+                       closure=closure, area=area)
+    np.testing.assert_allclose(got, ref, rtol=0.0, atol=1e-16)
+
+
+def test_redistribute_holds_both_invariants_where_the_others_cannot():
+    """The point of the closure: sum-to-one *and* per-fluid volume, together."""
+    fields, u, area, q = _divergent_case()
+    dt = CFL * DZ / float(np.max(np.abs(u)))
+    state = {c: fields.copy() for c in ("none", "local", "redistribute")}
+    v0 = np.einsum("iklm,lm->i", fields, area) * DZ
+    influx = np.zeros(2)
+    outflux = {c: np.zeros(2) for c in state}
+
+    for _ in range(150):
+        influx[0] += float((u[0] * area).sum()) * dt
+        for c, f in state.items():
+            outflux[c] += np.array(
+                [float((u[-1] * area * f[i, -1]).sum()) * dt for i in range(2)]
+            )
+            state[c] = advect_multi(f, u, DZ, dt, inlet_values=[1.0, 0.0],
+                                    closure=c, area=area)
+
+    report = {}
+    for c, f in state.items():
+        v1 = np.einsum("iklm,lm->i", f, area) * DZ
+        report[c] = (
+            float(np.max(np.abs(f.sum(axis=0) - 1.0))),
+            float(np.max(np.abs(v1 - (v0 + influx - outflux[c]))) / v0.sum()),
+        )
+    s1_red, mass_red = report["redistribute"]
+    assert s1_red < 1e-12, f"redistribute lost sum-to-one: {s1_red:.2e}"
+    assert mass_red < 1e-12, f"redistribute lost mass: {mass_red:.2e}"
+    # And each of the other two fails exactly one of the invariants.
+    assert report["none"][0] > 1e-4, "expected 'none' to break sum-to-one"
+    assert report["local"][1] > 1e-4, "expected 'local' to break per-fluid mass"
+
+
+def test_redistribute_stays_bounded():
+    fields, u, area, q = _divergent_case()
+    dt = CFL * DZ / float(np.max(np.abs(u)))
+    f = fields.copy()
+    for _ in range(300):
+        f = advect_multi(f, u, DZ, dt, inlet_values=[1.0, 0.0],
+                         closure="redistribute", area=area)
+        assert f.min() > -1e-14 and f.max() < 1.0 + 1e-14
+
+
+def test_redistribute_requires_area_and_rejects_unknown_closures():
+    fields, u, area, q = _divergent_case(nz=20)
+    with pytest.raises(ValueError, match="needs the cell area"):
+        advect_multi(fields, u, DZ, 1e-3, closure="redistribute")
+    with pytest.raises(ValueError, match="unknown transverse closure"):
+        advect_multi(fields, u, DZ, 1e-3, closure="magic", area=area)
