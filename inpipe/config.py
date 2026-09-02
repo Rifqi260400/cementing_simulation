@@ -160,7 +160,10 @@ class NumericsConfig:
     #: depth (mixed rheology).  See A-07.
     divergence_correction: bool = True
     #: Velocity mapping strategy from the 1D profile onto 3D cells.  See A-04.
-    velocity_mapping: str = "centroid"
+    #: "centroid" evaluates u at the cell centroid radius; it exceeds the 1 %
+    #: flow-rate gate for yield-stress fluids at the paper's own 13 x 18
+    #: resolution, so "area_average" is the default.
+    velocity_mapping: str = "area_average"
     #: Number of steps between diagnostic records.
     diagnostics_every: int = 10
 
