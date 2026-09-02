@@ -36,7 +36,36 @@ quantifies the impact; `n/a` = the choice is exact, so there is nothing to vary.
 | A-13 | Eq. A.3, A.6 | `u(r) = A[T(r)/k]^{…} + B` | The PDF renders the exponent as `1/(n+1)` | Use `1/n + 1` | The paper's PDF text of Eqs. A.3–A.6 is OCR-corrupted. Carrying out the integration `−du/dr = ((τ−τ0)/k)^{1/n}` from `r` to `R` yields the exponent `1/n + 1`. Confirmed empirically: `1/n + 1` reproduces Poiseuille (rel 1e-10), the power-law peak `(3n+1)/(n+1)` (rel 1e-8) and Buckingham–Reiner (rel 1e-8); `1/(n+1)` reproduces none of them | n/a (verified against three closed forms) |
 | A-14 | Eq. A.9 | `f^{n+1} = f^n + (Δt/ΔV) Σ_j u_{n,j} f_{s,j}` | The equation as printed is dimensionally wrong (no face area `A_j`) and has the wrong sign for outward normals | `f^{n+1} = f^n − (Δt/ΔV) Σ_j (u_{n,j} · A_j · f_{s,j})` | OCR corruption again. The face area is required for dimensional consistency with Eq. A.8 (`∫_s u_n f_s dS`), and with outward-positive face normals an outflow must *decrease* the cell content, so the sign is negative | n/a |
 | A-15 | §A.1 | Brent's root find for the pressure gradient | Brackets and tolerances | Lower bracket `τ0·(1+1e-9)`; upper bracket expanded geometrically (×2, ≤200 iterations) from an analytical power-law inversion; `xtol = rtol = 1e-12` | `Q(τ_w)` is zero for `τ_w ≤ τ0` and strictly increasing above it, so a sign change is guaranteed once the upper bracket is large enough. A failed bracket raises `NoBracketError` rather than returning a silent wrong answer | n/a |
-| A-16 | §2.4, Eq. (2) | `∂f_i/∂t + u·∇f_i = D_m ∇²f_i`, with `D_m` term dropped | — | Right-hand side dropped, matching the paper. Physical diffusion is *not* modelled in Phase 1 | The paper's own justification is quantitative: at their resolution (`Δx = 30 m`, `Δt = 0.1 min`) numerical diffusion `Δx²/Δt ≈ 150 m²/s` swamps physical `D_m ≈ 1e-3…1e-4 m²/s` by ~1e5, so the physical term is meaningless. **This justification weakens as `Δx` falls** — at `Δx ≈ 1 m` the ratio drops by ~1e3 — which is precisely why `Dm_num` is measured and reported here. Restoring the term is Phase 3 | yes — `Dm_num` measured and reported at several `Δx` |
+| A-16 | §2.4, Eq. (2) | `∂f_i/∂t + u·∇f_i = D_m ∇²f_i`, with `D_m` term dropped | — | Right-hand side dropped, matching the paper. Physical diffusion is *not* modelled in Phase 1 | The paper's own justification is quantitative: at their resolution (`Δx = 30 m`, `Δt = 0.1 min`) numerical diffusion `Δx²/Δt ≈ 150 m²/s` swamps physical `D_m ≈ 1e-3…1e-4 m²/s` by ~1e5, so the physical term is meaningless. **This justification weakens as `Δx` falls** — at `Δx ≈ 1 m` the ratio drops by ~1e3 — which is precisely why `Dm_num` is measured and reported here. Restoring the term is Phase 3 | yes — see the measured numbers below |
+
+### Measured numerical diffusion (the A-08/A-16 result)
+
+The paper discards the physical diffusion term because at *their* resolution it
+is swamped by numerical diffusion. Reconstructed at fine resolution, that
+justification inverts. Measured on the 4 m / 19 mm parabolic-stretching case,
+first-order upwind at `CFL = 0.4`, fitting `D` from the variance of `−∂f/∂z`
+via `Var = 2Dt`:
+
+| `Δz` [m] | `Δt` [s] | Courant | `Δx²/Δt` (paper's estimate) | upwind modified equation `½u Δz(1−C)` | fitted from the front |
+|---|---|---|---|---|---|
+| 0.0200 | 0.0805 | 0.043 | 4.97e-3 | 1.01e-4 | 1.06e-4 |
+| 0.0100 | 0.0402 | 0.043 | 2.48e-3 | 5.07e-5 | 5.20e-5 |
+| 0.0050 | 0.0201 | 0.043 | 1.24e-3 | 2.54e-5 | 2.57e-5 |
+
+Two things follow, and both matter for the thesis contribution:
+
+1. **The paper's `Δx²/Δt` is the wrong scaling for this scheme.** For upwind
+   plus explicit Euler at a *fixed* Courant number `C`, the true leading-order
+   numerical diffusivity is `½u Δz(1−C)`, which is linear in `Δz`, not
+   `Δx²/Δt`. The two agree only in order of magnitude at the paper's own coarse
+   operating point; `Δx²/Δt` over-states the smearing by a factor of `2/(C(1−C))`
+   — here roughly 50×. Measured and predicted values agree to ~2 %.
+2. **At `Δz ≈ 1 cm` the numerical diffusivity has fallen *below* the physical
+   `D_m ≈ 1e-3 … 1e-4 m²/s`** (ratio 0.026 at `Δz = 5 mm` against `D_m = 1e-3`).
+   The paper's ratio is ~1e5 the other way. So the grounds for dropping the
+   right-hand side of Eq. (2) do not survive mesh refinement, and Phase 3
+   (restoring finite-rate diffusive mixing) is not optional polish — it is
+   required for the refined model to mean anything.
 | A-17 | §2.1, A.4 | Mixing status `s` is set to 1 where instability is detected | — | `s` is advected with the same kernel and scheme as concentration, but **nothing sets `s = 1` in Phase 1**; it stays at its initial value | Instability detection (Eqs. A.10, A.14–A.16) is out of scope for Phase 1, and at `β = 0` two of the three criteria degenerate anyway. The plumbing exists so Phase 3 has somewhere to write | n/a |
 | A-18 | §6.3 (spec) | — | Outlet condition | Zero-gradient (`∂f/∂z = 0`) outflow at the shoe; inlet is Dirichlet on `f` from the pump schedule with `Q` imposed | Standard outflow condition for pure advection with `u > 0`: the outlet face value equals the last interior cell, so no information propagates upstream | n/a |
 | A-20 | §2.3 | — | How to make exact area averaging cheap enough for the time loop | Because `u = u(r)`, the cell integral is a linear functional of the 1D profile: `∫_cell u dA = ∫₀ᴿ u(r)·(dA_cell/dr) dr`. Precompute `W[cell, k] = area(cell ∩ disc(r_{k+1})) − area(cell ∩ disc(r_k))` exactly, once per grid, with `n_radial = 1024` annular bins; at run time apply `W` by matvec | The weights are pure geometry, so they are built once and reused for every station and every timestep. Verified against direct 2D Gauss–Legendre quadrature and shown to converge second-order in `n_radial` (`tests/test_grid.py`). The annulus areas `Σ_cells W[:, k]` reproduce `π(r_{k+1}² − r_k²)` to 1e-13 | yes — `n_radial` convergence measured |
