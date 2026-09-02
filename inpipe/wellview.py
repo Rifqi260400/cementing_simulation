@@ -194,7 +194,7 @@ def animate_circulation(result, path, fluid_index=None, fps=12, dpi=120,
 
     if ax_prof is not None:
         c0, a0 = profiles(snap0)
-        (line_c,) = ax_prof.plot(c0, cg.z_centers, label=f"casing")
+        (line_c,) = ax_prof.plot(c0, cg.z_centers, label="casing")
         (line_a,) = ax_prof.plot(a0, z_a, label="annulus")
         ax_prof.set_ylim(cg.z_faces[-1], cg.z_faces[0])
         ax_prof.set_xlim(-0.03, 1.03)

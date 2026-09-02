@@ -90,7 +90,8 @@ def load_caliper(path=None, synthetic=False, keep_tail=False, verbose=True):
 
 
 def build(caliper, n_axial=250, excess=1.05, casing_od=CASING_OD,
-          casing_id=CASING_ID, flow_rate=FLOW_RATE, top_depth=TOP_DEPTH):
+          casing_id=CASING_ID, flow_rate=FLOW_RATE, top_depth=TOP_DEPTH,
+          cement_volume=None):
     shoe = float(caliper.depth[-1])
     length = shoe - top_depth
     if length <= 0.0:
@@ -108,9 +109,11 @@ def build(caliper, n_axial=250, excess=1.05, casing_od=CASING_OD,
     v_casing = math.pi * (0.5 * casing_id) ** 2 * length
     v_annulus = AnnulusGrid(length, casing_od, caliper, n_axial,
                             N_LAYER, N_AZIMUTH, z_offset=top_depth).total_volume
-    schedule = PumpSchedule(
-        [PumpStage(CEMENT, (v_casing + v_annulus) * excess, flow_rate)]
-    )
+    # ``cement_volume`` overrides the excess rule, so a job can be sized off a
+    # different hole than the one it is pumped into - which is exactly the
+    # mistake of designing on bit size and ignoring the caliper.
+    pumped = (v_casing + v_annulus) * excess if cement_volume is None else cement_volume
+    schedule = PumpSchedule([PumpStage(CEMENT, pumped, flow_rate)])
     solver = CirculationSolver(
         well, schedule, initial_fluid=MUD, grid=grid,
         numerics=NumericsConfig(diagnostics_every=40),

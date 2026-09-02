@@ -200,7 +200,6 @@ def circulation_pressure(
     )
 
     shoe_depth = float(z_a[-1] + 0.5 * annulus_dz)
-    top_annulus_pressure = surface_pressure + head_above_annulus
     return HydraulicsReport(
         casing_depth=np.asarray(casing_z, dtype=float),
         casing_pressure=casing_pressure + pump_pressure,

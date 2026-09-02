@@ -453,3 +453,27 @@ def test_local_efficiency_is_confounded_by_arrival_order(caliper):
     # Deep cells are essentially fully swept, shallow ones are not.
     assert eff[-5:].mean() > 0.95
     assert eff[:5].mean() < eff[-5:].mean()
+
+
+def test_vectorised_effective_matches_mix_fluids(caliper):
+    """The time loop's averaging must equal the reference rule, on both legs."""
+    from inpipe.fluid import mix_fluids
+
+    solver, schedule = build_solver(caliper, n_axial=30, n_layer=5, n_azimuth=4)
+    for _ in range(20):
+        solver.step()
+    for leg, fields, volume in (
+        ("casing", solver.f_casing, solver.casing_grid.cell_volume),
+        ("annulus", solver.f_annulus, solver.annulus_grid.cell_volume),
+    ):
+        params = solver._effective(fields, volume, solver._params)
+        for k in (0, 7, 15, 29):
+            ref = solver.effective_fluid(leg, k)
+            got = params[k]
+            assert got[0] == pytest.approx(ref.rho, rel=1e-12)
+            assert got[1] == pytest.approx(ref.tau0, rel=1e-12, abs=1e-15)
+            assert got[2] == pytest.approx(ref.k, rel=1e-12)
+            assert got[3] == pytest.approx(ref.n, rel=1e-12)
+    with pytest.raises(ValueError, match="leg must be"):
+        solver.effective_fluid("nonsense", 0)
+    assert mix_fluids is not None

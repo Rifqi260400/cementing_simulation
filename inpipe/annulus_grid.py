@@ -31,7 +31,6 @@ from dataclasses import dataclass
 import numpy as np
 
 from .caliper import CaliperLog
-from .slot import SlotProfile, slot_geometry
 from .velocity import velocity_profile
 
 __all__ = ["AnnulusGrid"]

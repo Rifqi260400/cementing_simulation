@@ -238,6 +238,25 @@ class CirculationSolver:
         np.divide(w, total, out=w, where=total > 0.0)
         return w @ params
 
+    def effective_fluid(self, leg: str, station: int) -> Fluid:
+        """Effective fluid at one station of ``"casing"`` or ``"annulus"``.
+
+        Defined by :func:`inpipe.fluid.mix_fluids`, the single statement of the
+        averaging rule (assumption A-06).  :meth:`_effective` is the vectorised
+        form used in the time loop; a test asserts the two agree.
+        """
+        if leg == "casing":
+            fields, volume = self.f_casing, self.casing_grid.cell_volume
+            weights = [float((fields[i, station] * volume).sum())
+                       for i in range(self.n_fluids)]
+        elif leg == "annulus":
+            fields, volume = self.f_annulus, self.annulus_grid.cell_volume[station]
+            weights = [float((fields[i, station] * volume).sum())
+                       for i in range(self.n_fluids)]
+        else:
+            raise ValueError(f"leg must be 'casing' or 'annulus', got {leg!r}")
+        return mix_fluids(self.fluids, weights, name=f"eff@{leg}:{station}")
+
     def _casing_velocity(self, q):
         grid = self.casing_grid
         params = self._effective(self.f_casing, grid.cell_volume, self._params)

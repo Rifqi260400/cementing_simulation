@@ -89,6 +89,47 @@ says so. Nothing is trimmed silently — `--keep-tail` leaves it in.
 | U-tube imbalance | peaks at **21.8 bar (316 psi)**, free-fall **99 %** of the job | 18.6 bar, 92 % |
 | conservation | sum-to-one 1.6e-13, volume 1.1e-15 | 1.3e-13, 7.9e-16 |
 
+## Mud left behind by the washouts
+
+```bash
+.venv/bin/python -m cases.mud_left_behind
+```
+
+Runs the same job three ways on the K-GEP-1 open hole and differences them.
+Produces `results/mud_left_behind.png`, `mud_left_section.png` and
+`mud_left_behind.mp4`.
+
+| scenario | cement | efficiency | mud left |
+|---|---|---|---|
+| A — real hole, job sized on the caliper | 14.71 m³ | **89.5 %** | 1.04 m³ |
+| B — in-gauge hole, same excess | 11.05 m³ | 82.1 % | 1.15 m³ |
+| C — real hole, job sized on **gauge** (caliper ignored) | 11.05 m³ | **69.8 %** | **2.99 m³** |
+
+**1. The cost of a washout is volume, not displacement.** The real annulus holds
++3.49 m³ (+54 %) more than an in-gauge hole. Design the job on bit size and you
+are short by that much: efficiency drops 89.5 % → 69.8 % and the mud left behind
+triples, from 1.04 to 2.99 m³.
+
+**2. On this well the leftover mud concentrates in the enlargements** — washed-out
+hole is 43 % of the annular volume but holds 66 % of the residual, 1.55× its
+share, and that ratio is stable as more is pumped. **This is a property of this
+well and this job, not a law about washouts:** on a synthetic log whose
+enlargements sit mid-well instead of at the shallow end, the same model gives a
+ratio below 1. Where the front has reached by the end of the job matters as much
+as the geometry.
+
+**3. Displacement itself is not worse in a washout** — at the same pore volumes
+pumped the real hole reaches 89.5 % against 82.1 % in gauge, by the
+profile-flattening mechanism below.
+
+**Nothing is stranded permanently.** Pumping 2.5 well volumes clears the annulus
+to 99.98 %, and 4× clears it exactly. Residual mud here always means *"not yet
+swept at the volume pumped"*, never *"stuck"*. In a real concentric washout the
+flow separates at the expansion and recirculates in the cavity, which strands
+fluid however long you circulate — a two-dimensional effect a reduced-order model
+with a fully-developed profile at every station cannot represent. **These numbers
+are lower bounds on what a washout costs.**
+
 ### Do not read the raw washout comparison
 
 Local efficiency correlates strongly with depth — annular flow is upward, so a
