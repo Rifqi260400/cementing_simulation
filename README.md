@@ -175,7 +175,45 @@ All geometric identities are **exact**, not convergent: cell areas and centroids
 come from closed-form circular-segment integrals, so refining the mesh does not
 improve the area sum — it was already at round-off.
 
-`pytest -q` runs all 163 tests, field gate included, in about 90 seconds.
+`pytest -q` runs the whole suite, field gate included, in a few minutes.
+
+### Robustness
+
+Beyond the physics gates, `tests/test_robustness.py` sweeps the input space and
+asserts the four invariants — per-fluid mass budget, sum-to-one, boundedness,
+finiteness — on every case:
+
+| axis | covered |
+|---|---|
+| rheology | Newtonian, thick Newtonian, power-law `n ∈ {0.2, 0.4}`, Bingham, Herschel–Bulkley with `τ0 = 30 Pa`, `n = 0.25` |
+| flow rate | four decades, down to barely above the yield stress |
+| grid | `1 × 7 × 8` (single axial cell), `5 × 1 × 1` (single cell per section), odd azimuth counts, up to `400 × 52 × 72` |
+| schedule | single stage, and three stages with a 3× rate step up and a 6× step down |
+| geometry | 0.5 m × 5 mm bench scale up to 1524 m × 127 mm full-length casing |
+| numerics | `CFL ∈ {0.05, 0.4, 0.9}`, both velocity mappings, all three transverse closures |
+
+**All cases pass on the defaults.** The only two configurations that fail are
+the two non-default modes the register already documents as deficient
+(`transverse_closure="local"`, and `enforce_discrete_continuity=False`); both
+have tests asserting they fail *in the documented way*, so nobody switches to
+them expecting conservation.
+
+### Performance
+
+Measured on the field case (three Herschel–Bulkley fluids, full job):
+
+| mesh | cells | ms/step |
+|---|---|---|
+| 40 × 7 × 8 | 2 240 | 0.9 |
+| 100 × 13 × 18 | 23 400 | 8 |
+| 200 × 13 × 18 | 46 800 | 28 |
+| 200 × 26 × 36 | 187 200 | 42 |
+| 400 × 52 × 72 | 1 497 600 | 266 |
+
+The paper's own mesh is 23 400 cells. The model stays comfortable to a few
+hundred thousand; at 1.5 M cells it still runs and still conserves, but it is
+well outside the point of a reduced-order model — if you need that resolution,
+you want the CFD run, not this.
 
 ---
 
@@ -192,6 +230,20 @@ improve the area sum — it was already at round-off.
 | plot reproducing the Fig. 5(a) centre-plane view | `results/fig5a_centre_plane.png` |
 
 ### Figures produced
+
+All of it can be written out for external comparison:
+
+```python
+from inpipe.postprocess import save_results
+save_results(result, "out/", prefix="case")
+```
+
+which produces a `.npz` of the full state (fractions, mixing status, velocity,
+cell geometry, rheology) plus CSVs of the centre-plane field, the area-averaged
+axial profile, the centreline velocity (spanning the full diameter, with the
+exact no-slip endpoints so a CFD profile overlays directly), and the outlet
+history. `centreline_velocity`, `radial_concentration` and
+`cross_section_average` give the same quantities as arrays for line probes.
 
 | file | what it shows |
 |---|---|
