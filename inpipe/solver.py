@@ -26,7 +26,7 @@ from typing import Sequence
 import numpy as np
 
 from .config import SimulationConfig
-from .fluid import Fluid, PumpSchedule
+from .fluid import Fluid, PumpSchedule, mix_fluids
 from .grid import Grid
 from .transport import (
     advect,
@@ -160,7 +160,6 @@ class InPipeSolver:
         self._outlet_time: list[float] = []
         self._outlet_fractions: list[np.ndarray] = []
         self._profile_cache: dict = {}
-        self._cache_limit = 4096
         #: (n_fluids, 4) matrix of [rho, tau0, k, n] for fast weighted averaging.
         self._fluid_params = np.array(
             [[fl.rho, fl.tau0, fl.k, fl.n] for fl in fluids], dtype=float
@@ -198,10 +197,15 @@ class InPipeSolver:
         return weights @ self._fluid_params
 
     def effective_fluid_at(self, k: int) -> Fluid:
-        """Effective fluid at axial station ``k``."""
-        rho, tau0, kk, n = self.effective_parameters()[k]
-        return Fluid(name=f"eff@{k}", rho=float(rho), tau0=float(tau0),
-                     k=float(kk), n=float(n))
+        """Effective fluid at axial station ``k``.
+
+        Defined by :func:`inpipe.fluid.mix_fluids`, which is the single
+        statement of the averaging rule.  :meth:`effective_parameters` is the
+        vectorised form used in the time loop; a test asserts the two agree.
+        """
+        cv = self.grid.cell_volume
+        weights = [float((self.f[i, k] * cv).sum()) for i in range(self.n_fluids)]
+        return mix_fluids(self.fluids, weights, name=f"eff@{k}")
 
     def _station_velocity(self, q: float, params) -> np.ndarray:
         """Cross-sectional velocity field for one effective rheology, cached.
@@ -212,7 +216,8 @@ class InPipeSolver:
         that differ only by round-off from re-solving.
         """
         rho, tau0, kk, n = params
-        key = (round(q, 15), round(float(tau0), 9), round(float(kk), 12), round(float(n), 9))
+        d0, d1, d2 = self.config.numerics.cache_key_decimals
+        key = (round(q, 15), round(float(tau0), d0), round(float(kk), d1), round(float(n), d2))
         cached = self._profile_cache.get(key)
         if cached is None:
             fluid = Fluid(name="eff", rho=float(rho), tau0=float(tau0),
@@ -224,7 +229,7 @@ class InPipeSolver:
             )
             prof = VelocityProfile(fluid=fluid, radius=self.grid.radius, tau_w=tau_w)
             cached = self.grid.map_velocity(prof, self.config.numerics.velocity_mapping)
-            if len(self._profile_cache) >= self._cache_limit:
+            if len(self._profile_cache) >= self.config.numerics.cache_limit:
                 self._profile_cache.clear()
             self._profile_cache[key] = cached
         return cached
@@ -238,10 +243,11 @@ class InPipeSolver:
         an interface are mixed, so this collapses ~100 solves to a handful.
         """
         params = self.effective_parameters()
+        d0, d1, d2 = self.config.numerics.cache_key_decimals
         rounded = np.stack([
-            np.round(params[:, 1], 9),
-            np.round(params[:, 2], 12),
-            np.round(params[:, 3], 9),
+            np.round(params[:, 1], d0),
+            np.round(params[:, 2], d1),
+            np.round(params[:, 3], d2),
         ], axis=1)
         _, first_idx, inverse = np.unique(rounded, axis=0, return_index=True,
                                           return_inverse=True)

@@ -170,6 +170,13 @@ class NumericsConfig:
     velocity_mapping: str = "area_average"
     #: Number of steps between diagnostic records.
     diagnostics_every: int = 10
+    #: Decimal places used to key the per-station velocity-profile cache on the
+    #: effective (tau0, k, n).  Chosen so that stations differing only by
+    #: round-off share a solve; ~1e-9 relative at field-scale magnitudes.
+    #: See A-21.
+    cache_key_decimals: tuple = (9, 12, 9)
+    #: Maximum number of cached station profiles before the cache is cleared.
+    cache_limit: int = 4096
 
 
 @dataclass

@@ -271,3 +271,40 @@ def test_gate4_field_scale_200m(convergence_study, capsys):
     assert result.outlet_fractions[-1, i_cem] > 0.5
     # Mixed-rheology stations exist, so the divergence correction is exercised.
     assert solver._n_unique_stations > 1
+
+
+def test_vectorised_effective_parameters_match_mix_fluids():
+    """The time loop's vectorised averaging must equal the reference rule.
+
+    ``fluid.mix_fluids`` is the single statement of assumption A-06;
+    ``effective_parameters`` is its vectorised form.  Drift between the two
+    would silently change the rheology the solver actually uses.
+    """
+    solver, displacing, mud = lab_solver(n_axial=40, z0=1.7)
+    for _ in range(25):
+        solver.step()
+    params = solver.effective_parameters()
+    for k in (0, 12, 19, 25, 39):
+        ref = solver.effective_fluid_at(k)
+        got = params[k]
+        assert got[0] == pytest.approx(ref.rho, rel=1e-12)
+        assert got[1] == pytest.approx(ref.tau0, rel=1e-12, abs=1e-15)
+        assert got[2] == pytest.approx(ref.k, rel=1e-12)
+        assert got[3] == pytest.approx(ref.n, rel=1e-12)
+
+
+def test_mixed_station_averaging_is_actually_exercised():
+    """A station straddling the interface must average two distinct rheologies."""
+    mud = Fluid("mud", rho=1198.0, tau0=2.0, k=0.30, n=0.72)
+    cement = Fluid("cement", rho=1870.0, tau0=6.0, k=0.55, n=0.65)
+    schedule = PumpSchedule([PumpStage(cement, LAB_Q * 1000.0, LAB_Q)])
+    solver = InPipeSolver(lab_config(n_axial=40), schedule, initial_fluid=mud)
+    # 1.75 m falls mid-cell (dz = 0.1 m), so one station genuinely straddles.
+    # An interface landing exactly on a face would give pure stations only.
+    solver.set_initial_interface(1.75, cement, mud)
+    params = solver.effective_parameters()
+    # The straddled station holds a genuine mixture, strictly between the two.
+    n_col = params[:, 3]
+    assert n_col.min() == pytest.approx(cement.n, rel=1e-12)
+    assert n_col.max() == pytest.approx(mud.n, rel=1e-12)
+    assert np.any((n_col > cement.n + 1e-6) & (n_col < mud.n - 1e-6))

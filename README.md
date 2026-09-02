@@ -165,7 +165,7 @@ outermost layers hold 31 % of the leftover mud on 7 % of the area.
 
 | Gate | Module | What it pins down |
 |---|---|---|
-| 1 | `fluid.py` | unit round-trips, pump-stage boundaries |
+| 1 | `fluid.py` | unit round-trips against values quoted in the paper, Herschel-Bulkley constructors and validation, volume-weighted mixing, pump-stage boundaries at `t = 0`, exactly on a boundary, and past the end |
 | 2 | `velocity.py` | Poiseuille shape and peak, power-law peak `(3n+1)/(n+1)`, Buckingham–Reiner, no-slip, plug flatness, `Q` round-trip, yield limit, closed form vs. quadrature |
 | 3 | `grid.py` | areas sum to `πR²` and volumes to `πR²L` *exactly* at any resolution, mirror symmetry, equal-area layer alternative, velocity-mapping error |
 | 4 | `transport.py` | uniform-field invariance, mass budget over 1000 steps, sum-to-one, monotone square wave, parabolic stretching, CFL enforcement, numerical-diffusion scaling |
@@ -175,7 +175,7 @@ All geometric identities are **exact**, not convergent: cell areas and centroids
 come from closed-form circular-segment integrals, so refining the mesh does not
 improve the area sum — it was already at round-off.
 
-`pytest -q` runs all 128 tests, field gate included, in about two minutes.
+`pytest -q` runs all 163 tests, field gate included, in about 90 seconds.
 
 ---
 
@@ -183,7 +183,7 @@ improve the area sum — it was already at round-off.
 
 | requirement | status |
 |---|---|
-| all five test gates green | 128 tests pass |
+| all five test gates green | 163 tests pass |
 | parabolic stretching reproduced | front matches `z₀ + u(r)t` to **0.16 cells** (1.6 mm at `Δz = 10 mm`); tip speed **1.9876 ū** against the analytical 2 |
 | smearing quantified as `Dm_num` | measured at four resolutions, matching the upwind modified equation to ~2 %; see the table above |
 | 200 m case under 5 min | **77 s** of the 300 s budget (200 × 13 × 18, 46 800 cells, 1258 steps, 61 ms/step) |
