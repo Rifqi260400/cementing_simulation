@@ -326,14 +326,35 @@ def solve_profile(q_target: float, fluid: Fluid, R: float, **kwargs) -> Velocity
 # ---------------------------------------------------------------------------
 
 
-def pressure_gradient(tau_w: float, R: float, rho: float, beta: float, g: float) -> float:
-    """Axial pressure gradient ``dp/dz`` [Pa/m] (paper Eq. A.7).
+def pressure_gradient(
+    tau_w: float,
+    R: float,
+    rho: float,
+    beta: float,
+    g: float,
+    flow_sign: float = 1.0,
+) -> float:
+    """Axial pressure gradient ``dp/dz`` [Pa/m] along measured depth.
 
-    ``dp/dz = rho * g * cos(beta) + 2 * tau_w / R``
+    ``z`` is measured depth, increasing downward.  ``flow_sign`` is ``+1`` when
+    the fluid flows *down* that axis (inside the casing) and ``-1`` when it
+    flows *up* it (in the annulus)::
 
-    with ``+z`` the flow direction and ``beta`` the inclination from vertical.
+        dp/dz = rho g cos(beta) - flow_sign * 2 tau_w / R
+
+    A force balance on an element gives this directly: wall shear always
+    opposes the motion, so it costs pressure *along the flow*, which subtracts
+    going down and adds going up.
+
+    Note on Eq. A.7
+    ---------------
+    The paper prints ``dp/dz - rho g cos(beta) = 2 tau_w / R``, i.e. friction
+    *adding* to the depth gradient.  That is the upward-flow (annulus) sign,
+    and it is inconsistent with an in-pipe model whose ``z`` is measured depth
+    and whose flow runs downward.  Taking it literally for the casing would
+    over-state the shoe pressure by twice the friction.  Logged as A-25.
     """
-    return rho * g * math.cos(beta) + 2.0 * tau_w / R
+    return rho * g * math.cos(beta) - flow_sign * 2.0 * tau_w / R
 
 
 def frictional_gradient(tau_w: float, R: float) -> float:

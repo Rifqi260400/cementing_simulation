@@ -39,6 +39,56 @@ therefore **structurally inactive** and are deliberately not implemented.
 
 ---
 
+## Full circulation: cement down the casing, up the annulus
+
+```bash
+.venv/bin/python -m cases.circulation_200m                  # synthetic caliper
+.venv/bin/python -m cases.circulation_200m path/to/cal.csv  # your own log
+```
+
+200 m of 5 in casing (5½ in OD) in an open hole whose diameter comes from a
+caliper log. The well starts full of mud; cement is pumped from surface with no
+spacer, turns at the shoe, and displaces mud up the annulus. Produces
+`results/circulation.mp4`, the section snapshots and the pressure history.
+
+The annulus is solved by the **parallel-plate (slot) approximation**, which is
+what the source paper says its own annulus model uses (Appendix A.1:
+`τ_w = h/2·P` for plates against `τ_w = R/2·P` for a pipe). Its error against
+the exact concentric-annulus solution is measured, not assumed: −0.31 % at
+gauge, −1.7 % at a 400 mm washout.
+
+**Caliper input.** CSV or LAS. Units come from an explicit argument, then from
+the column name or the LAS `~C` unit field, and only then from the diameter
+magnitude — which is unambiguous, since a borehole is either ~0.2 m or ~8.5 in.
+Depth is *never* inferred from its own magnitude: a 656 ft log and a 656 m log
+are indistinguishable that way, and guessing wrong scales the whole well by
+3.28. A diameter that resolves outside 0.02–2 m is refused rather than returned.
+
+### Three things the circulation model shows that are worth knowing
+
+**The well would free-fall for 84 % of this job.** Gravity enters as hydrostatic
+head and friction; the rate is the pump rate. But the report says that
+assumption fails: once cement fills the casing, the required pump pressure goes
+*negative*, peaking at a 9.4 bar (136 psi) U-tube imbalance. A real well would
+take fluid on its own and return faster than pumped. `is_free_falling` flags it
+every step. The swept geometry at a given *pumped volume* is still meaningful;
+the *timeline* is not.
+
+**Washouts do not degrade displacement in this model** — they marginally improve
+it (86–88 % either way). The mechanism is real: a wider gap flows slower, so the
+yield stress takes a bigger share of the stress budget, the plug grows from 30 %
+to 63 % of the gap, and the profile flattens from `u_max/ū` = 1.25 to 1.12. A
+flatter profile displaces better. Every mechanism that makes real washouts bad —
+eccentricity, density segregation into the cavity, mud stranded below its yield
+stress — is outside this phase. **If the point of modelling enlargements is to
+predict where cement fails, eccentricity is the missing piece**, and it is the
+one the paper's stratified grid exists to represent.
+
+**Eq. A.7's printed sign is wrong for the casing.** Wall shear opposes motion, so
+friction costs pressure *along the flow*: `dp/dz = ρg cos β − 2τ_w/R` going down,
+`+` going up. The paper prints the upward-flow sign; using it for a downward
+casing over-states the shoe pressure by twice the friction.
+
 ## Install and run
 
 ```bash
@@ -59,7 +109,13 @@ inpipe/
   grid.py         Module 3 - stratified cross-section mesh, exact segment geometry
   transport.py    Module 4 - axial VOF advection, CFL, numerical-diffusion metrics
   interface.py    Module 5 - Phase 2 placeholder (see the module docstring)
-  solver.py       Module 6 - the coupled time loop and diagnostics
+  solver.py       Module 6 - the in-pipe time loop and diagnostics
+  slot.py         annular flow by the parallel-plate approximation
+  caliper.py      caliper log reading (CSV/LAS) and unit resolution
+  annulus_grid.py annular mesh with a depth-varying cross-section
+  hydraulics.py   hydrostatic head, friction, ECD, the U-tube imbalance
+  circulation.py  the coupled casing-and-annulus solver
+  wellview.py     well-section rendering and job animation
   postprocess.py  plotting: centre-plane view, outlet history, conservation report
 cases/            runnable lab-scale and field-scale cases
 tests/            the five test gates
@@ -230,6 +286,10 @@ you want the CFD run, not this.
 | plot reproducing the Fig. 5(a) centre-plane view | `results/fig5a_centre_plane.png` |
 
 ### Figures produced
+
+| `results/circulation.mp4` | the job as an animation - cement down, round the shoe, up the annulus |
+| `results/circulation_sections.png` | well sections at four times |
+| `results/circulation_history.png` | efficiency, ECD and the U-tube imbalance against time |
 
 All of it can be written out for external comparison:
 

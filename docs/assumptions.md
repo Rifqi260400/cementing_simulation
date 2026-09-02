@@ -121,3 +121,49 @@ Two things follow, and both matter for the thesis contribution:
 | A-22 | §A.1 | `Q(z)` is imposed and uniform | Nothing about the discrete consistency of the mapped cell velocities | Rescale each station's mapped velocity field by a single scalar so `Σ_cells u·A = Q` exactly (`NumericsConfig.enforce_discrete_continuity`) | The area-averaged mapping is already accurate to ~4e-6 relative (A-04), so this is a tiny correction — but it makes `Σ_c (∇·u)_c A_c` vanish to round-off rather than to 4e-6, which is exactly what the `"redistribute"` closure needs in order to conserve to 1e-12 instead of 1e-6. A scalar rescale cannot change the profile shape, so it introduces no new physics | n/a |
 | A-23 | Eq. A.2 | `Q = ∫_A u dA`, evaluated by Brent iteration on the pressure gradient | — | Use the **closed-form** `Q(τ_w)` for Herschel–Bulkley obtained by integrating Eq. A.2 by parts, rather than the spec's adaptive quadrature. The quadrature version is kept as `flow_rate_quad` | The `τ_w` root find sits inside the time loop at every station holding mixed fluids; the quadrature version dominated field-scale runtime (`solve_tau_w` went from ~10 ms to 24 µs, ~400×). The closed form is *exact*, not an approximation: `Q = πR³(Tm/k)^{1/n}·a·[a²n/(3n+1) + 2xa·n/(2n+1) + x²n/(n+1)]` with `Tm = τ_w − τ0`, `x = τ0/τ_w`, `a = 1 − x`. Asserted equal to the quadrature to rel 1e-10 across six rheologies and five stress levels, and shown to reduce to Hagen–Poiseuille and to the power-law result in closed form | n/a (exact, cross-checked) |
 | A-19 | §3.1 | The paper's CFD comparison case is at `β = 83°` from vertical | — | The 4 m / 19 mm integration case here is run **vertical** (`β = 0`), mirroring the paper's *geometry* only | At `β = 83°` the paper's result is dominated by segregation and backflow (Fig. 5), which requires the buoyancy machinery that Phase 1 deliberately omits (A-10). **Consequence: paper Fig. 5 is not quantitatively reproducible in Phase 1** — only its centre-plane *view* and the concentric parabolic-stretching mechanism are. This is a scope limit, not a validation failure | n/a |
+
+
+---
+
+## C. The annulus leg and the irregular wellbore (added after Phase 1)
+
+The circulation model — cement down the casing, round the shoe, up the annulus
+past a caliper-measured hole — goes beyond the source paper, which models the
+casing only and states that it "connects an existing annulus model" (Dai & Liu,
+2018) that it does not describe. These rows record what was built in its place.
+
+| ID | Paper ref | What the paper specifies | What is missing | Our choice | Justification | Sensitivity tested? |
+|----|-----------|--------------------------|-----------------|------------|----------------|---------------------|
+| A-24 | §A.1 | "Very similar equations … are used for calculating the flow in annulus (assuming parallel plates) … we have `τ_w = h/2·P` for flow between plates with a gap width `h`" | The annulus model itself is in a separate, undescribed paper | **Parallel-plate (slot) approximation**, half-gap `b = (r_o − r_i)/2`, width `W = π(r_o + r_i)`. The velocity profile is then *identical in form* to the pipe profile with `R → b`, so `velocity_profile` is reused unchanged; only the flow-rate integral differs and it has the same kind of closed form | This is the one sentence the paper gives about its annulus, so it is the faithful choice. The slot area `2bW` equals the true annular area `π(r_o²−r_i²)` exactly, by construction. The approximation's own error is measured, not assumed: **−0.31 %** against the exact concentric-annulus solution at 5½ in casing in an 8½ in hole, and still only **−1.7 %** at a 400 mm washout | yes — `slot_error_estimate` measures it at four hole sizes |
+| A-25 | Eq. A.7 | `dp/dz − ρ g cos β = 2 τ_w / R` | — | `dp/dz = ρ g cos β − flow_sign · 2τ_w/R`, with `flow_sign = +1` down the depth axis (casing) and `−1` up it (annulus) | **The paper's printed sign is wrong for its own geometry.** Wall shear opposes the motion, so it costs pressure *along the flow*: a force balance gives `−dp/dz + ρg − 2τ_w/R = 0` for downward flow. The printed form is the upward-flow (annulus) sign, and taking it literally for the casing over-states the shoe pressure by twice the friction. The two legs now carry opposite signs explicitly | n/a (force balance) |
+| A-26 | — | — | What happens to the radial structure at the shoe | The casing outlet's **flux-weighted mixing cup** becomes a uniform annulus inlet | The flow reverses through the shoe and float equipment over a length no reduced-order model resolves. Any radial structure in the casing is lost at the turn, and the annulus develops its own profile from a uniform inlet. This under-states contamination if the casing front is strongly stretched at breakthrough | no |
+| A-27 | — | Uniform pipe diameter throughout | Nothing about a varying cross-section | Annular cell areas, volumes and axial face areas all vary with depth from the caliper; the transport kernel carries face areas explicitly rather than cancelling them | The paper's Eq. A.9 is written with face areas, so this is the general form and the uniform pipe is its special case. **The face areas are the subtle part:** flux crosses *faces*, whose areas differ from the cell areas either side where the hole diameter varies, so a velocity field normalised at cell centres does not carry `Q` through the faces between them. Left uncorrected this broke `Σ f_i = 1` by 2.4 %. `AnnulusGrid.normalise_face_flux` enforces it — physics, since the well is incompressible and every axial face passes the same rate | yes — `test_face_flux_normalisation_is_exact` |
+| A-28 | Eq. A.7 | — | Whether gravity feeds back into the flow | Gravity enters as **hydrostatic head and friction only**. The flow rate is the pump rate; the U-tube imbalance is computed and reported but does not drive the flow | Chosen scope for this phase. **The report is not decoration — it says the assumption fails here.** On the 200 m case the casing column becomes heavy enough that the required pump pressure goes *negative* for **84 % of the job**, peaking at a 9.4 bar (136 psi) imbalance: a real well would free-fall and return faster than pumped. `HydraulicsReport.is_free_falling` flags it every step. Until U-tube hydraulics are added, the displacement *timeline* from this model is not the real one, though the swept geometry at a given pumped volume still is | yes — measured over the whole job |
+| A-29 | §A.3 | Segregation is inactive at `β = 0` because every criterion carries `sin β` | That is only true of *transverse* buoyancy | Axial density instability is **not** modelled, and is flagged rather than assumed away | At `β = 0` transverse buoyancy vanishes but **axial buoyancy is maximal**. Heavy cement over lighter mud flowing *down* the casing is Rayleigh–Taylor unstable and should finger; the same pair flowing *up* the annulus is stable, which is why cementing works at all. The paper's criteria are blind to this because they are built on `sin β`. Correcting the earlier claim in this register that "every buoyancy criterion degenerates" — the transverse ones do, the axial one does not | no |
+| A-30 | — | — | Whether the displaced fluid can yield at all | Not enforced; **reported** by `CirculationResult.yield_diagnostic` | A displaced fluid only moves where the flow yields it; below its yield stress it is immobile however long the job runs — the unyielded-mud channel of annular displacement theory. This model averages rheology per station and solves one profile, so it will "displace" fluid a real well would strand. On the case here the cement's own yield stress floors `τ_w` at 6.8–20 Pa, well above the mud's 2 Pa, so nothing is stranded; with a stiffer mud or a lower rate it would be | yes — diagnostic tested at both extremes |
+
+### Washouts do not degrade displacement in this model — and why that matters
+
+Field experience says washed-out intervals cement badly. This model says the
+opposite, by a small margin (86–88 % efficiency either way). The mechanism is
+real and worth understanding before dismissing it: for a fixed pumped rate a
+wider gap flows *slower*, so the yield stress takes a larger share of the stress
+budget, the plug grows, and the profile flattens toward slug flow —
+
+| hole | gap | `ū` [m/s] | `u_max/ū` | plug / gap |
+|---|---|---|---|---|
+| 8½ in (gauge) | 38 mm | 0.62 | 1.247 | 0.30 |
+| 10 in | 55 mm | 0.39 | 1.203 | 0.40 |
+| 12 in | 80 mm | 0.24 | 1.159 | 0.51 |
+| 14.8 in | 118 mm | 0.14 | 1.118 | 0.63 |
+
+— and a flatter profile displaces better. So a concentric, buoyancy-free
+washout is *locally* easier to displace, not harder. It still holds more mud in
+absolute terms, simply by being bigger.
+
+**Every mechanism that makes real washouts bad is outside this phase:**
+eccentricity (the casing is not centred, and the narrow side is bypassed),
+density segregation into the enlarged cavity, and mud left below its yield
+stress in the low-shear pocket (A-30). If the purpose of modelling
+enlargements is to predict where cement fails, at least eccentricity is
+needed — it is the one the paper's own stratified grid exists to represent.

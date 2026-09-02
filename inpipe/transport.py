@@ -171,6 +171,8 @@ def advect(
     inlet_value=0.0,
     divergence_correction: bool = True,
     u_faces: np.ndarray | None = None,
+    face_area: np.ndarray | None = None,
+    cell_volume: np.ndarray | None = None,
 ) -> np.ndarray:
     """One explicit Euler step of axial advection.
 
@@ -193,9 +195,20 @@ def advect(
     u_faces : optional precomputed ``(n_axial + 1, ...)`` face velocity stack
         from :func:`face_velocity_stack`.  Pass it when advecting several
         fields with the same velocity field, so the faces are built once.
+    face_area : ``(n_axial + 1, ...)`` axial face areas [m^2].
+    cell_volume : ``(n_axial, ...)`` cell volumes [m^3].
 
-    The update needs no cell area: for a uniform-ID pipe the same area divides
-    out of the face flux and the cell volume.
+    Geometry
+    --------
+    For a **uniform** cross-section, ``face_area`` and ``cell_volume`` may be
+    omitted: the same area divides out of the face flux and the cell volume, so
+    the update reduces to ``dt/dz`` times a velocity difference.
+
+    For a **varying** cross-section - an open hole with washouts - it does not
+    cancel, and both must be supplied.  The update is then the full
+    finite-volume form of Eq. A.8, ``f^{n+1} = f^n - (dt/dV) sum_j u_j A_j
+    f_{s,j}``, which is what the paper writes and what the uniform case is a
+    special case of.
 
     Returns the updated field; ``f`` is not modified.
     """
@@ -204,11 +217,27 @@ def advect(
         u_cells = np.broadcast_to(np.asarray(u_cells, dtype=float), f.shape)
         u_faces = face_velocity_stack(u_cells)
     return _advect_with_faces(
-        f, u_faces, dz, dt, scheme, inlet_value, divergence_correction
+        f, u_faces, dz, dt, scheme, inlet_value, divergence_correction,
+        face_area, cell_volume,
     )
 
 
-def _advect_with_faces(f, uf, dz, dt, scheme, inlet_value, divergence_correction):
+def _flux_weights(uf, dz, face_area, cell_volume):
+    """Return ``(u*A at faces, cell volume)`` in a form the update can divide by.
+
+    With no geometry given the areas cancel and the pair degenerates to
+    ``(uf, dz)`` - the uniform-cross-section form, bit-identical to what it was
+    before variable geometry existed.
+    """
+    if face_area is None:
+        return uf, dz
+    if cell_volume is None:
+        raise ValueError("face_area was given without cell_volume")
+    return uf * face_area, cell_volume
+
+
+def _advect_with_faces(f, uf, dz, dt, scheme, inlet_value, divergence_correction,
+                       face_area=None, cell_volume=None):
     """The update itself, given a precomputed face velocity stack ``uf``.
 
     Face values are written into one preallocated buffer rather than
@@ -224,11 +253,12 @@ def _advect_with_faces(f, uf, dz, dt, scheme, inlet_value, divergence_correction
     ff[0] = np.where(uf[0] >= 0.0, inlet_value, f[0])
     ff[-1] = f[-1]
 
-    flux = uf * ff  # per unit area; the area cancels for a uniform-ID pipe
-    div_flux = (flux[1:] - flux[:-1]) / dz
+    ua, volume = _flux_weights(uf, dz, face_area, cell_volume)
+    flux = ua * ff
+    div_flux = (flux[1:] - flux[:-1]) / volume
 
     if divergence_correction:
-        div_flux -= f * ((uf[1:] - uf[:-1]) / dz)
+        div_flux -= f * ((ua[1:] - ua[:-1]) / volume)
 
     return f - dt * div_flux
 
@@ -251,12 +281,16 @@ def advect_multi(
     closure: str = "redistribute",
     area: np.ndarray | None = None,
     u_faces: np.ndarray | None = None,
+    face_area: np.ndarray | None = None,
+    cell_volume: np.ndarray | None = None,
 ) -> np.ndarray:
     """Advect a stack of volume fractions, ``(n_fluids, n_axial, n_layer, n_azimuth)``.
 
     ``inlet_values`` is a sequence of length ``n_fluids``.  ``closure`` selects
     the transverse closure described in the module docstring; ``area`` is the
-    cell cross-sectional area, required by ``"redistribute"``.
+    cell cross-sectional area, required by ``"redistribute"``.  ``face_area``
+    and ``cell_volume`` carry a varying cross-section; omit both for a uniform
+    one (see :func:`advect`).
     """
     fields = np.asarray(fields, dtype=float)
     n_fluids = fields.shape[0]
@@ -283,16 +317,20 @@ def advect_multi(
         out[i] = _advect_with_faces(
             fields[i], u_faces, dz, dt, scheme, inlet_values[i],
             divergence_correction=(closure == "local"),
+            face_area=face_area, cell_volume=cell_volume,
         )
     if closure != "redistribute":
         return out
 
-    div_u = (u_faces[1:] - u_faces[:-1]) / dz  # (n_axial, n_layer, n_azimuth)
-    return _apply_transverse_redistribution(out, fields, div_u, area, dt)
+    ua, volume = _flux_weights(u_faces, dz, face_area, cell_volume)
+    div_u = (ua[1:] - ua[:-1]) / volume  # (n_axial, n_layer, n_azimuth)
+    weight = area if cell_volume is None else cell_volume
+    return _apply_transverse_redistribution(out, fields, div_u, weight, dt)
 
 
 def _apply_transverse_redistribution(
-    out: np.ndarray, fields: np.ndarray, div_u: np.ndarray, area: np.ndarray, dt: float
+    out: np.ndarray, fields: np.ndarray, div_u: np.ndarray, weight: np.ndarray,
+    dt: float,
 ) -> np.ndarray:
     """Move the divergence-induced imbalance sideways instead of destroying it.
 
@@ -310,7 +348,9 @@ def _apply_transverse_redistribution(
     donor = np.clip(-div_u, 0.0, None)  # lateral outflow rate
     receiver = np.clip(div_u, 0.0, None)  # lateral inflow rate
 
-    w = donor * area  # (n_axial, n_layer, n_azimuth)
+    # Weighted by cell volume (or, for a uniform section, equivalently by
+    # area, since the volumes are then all A*dz).
+    w = donor * weight
     supply = w.sum(axis=(1, 2))  # per station
     active = supply > 0.0
     if not np.any(active):

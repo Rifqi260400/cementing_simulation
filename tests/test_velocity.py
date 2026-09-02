@@ -142,16 +142,31 @@ def test_monotone_decreasing():
     assert np.all(np.diff(u) <= 1e-15)
 
 
-def test_pressure_gradient_vertical():
-    """Vertical pipe: dp/dz = rho g + 2 tau_w / R."""
+def test_pressure_gradient_sign_follows_the_flow_direction():
+    """Friction costs pressure along the flow: down subtracts, up adds.
+
+    z is measured depth.  Taking Eq. A.7's printed sign literally for downward
+    casing flow would over-state the shoe pressure by twice the friction
+    (assumption A-25).
+    """
     rho, g, tau_w = 1500.0, 9.80665, 12.0
-    got = pressure_gradient(tau_w, R, rho, beta=0.0, g=g)
-    assert got == pytest.approx(rho * g + 2.0 * tau_w / R, rel=1e-15)
+    friction = 2.0 * tau_w / R
+    down = pressure_gradient(tau_w, R, rho, beta=0.0, g=g, flow_sign=+1.0)
+    up = pressure_gradient(tau_w, R, rho, beta=0.0, g=g, flow_sign=-1.0)
+    assert down == pytest.approx(rho * g - friction, rel=1e-15)
+    assert up == pytest.approx(rho * g + friction, rel=1e-15)
+    assert up - down == pytest.approx(2.0 * friction, rel=1e-12)
 
 
 def test_pressure_gradient_horizontal_has_no_hydrostatic_term():
-    got = pressure_gradient(12.0, R, 1500.0, beta=math.pi / 2.0, g=9.80665)
-    assert got == pytest.approx(2.0 * 12.0 / R, rel=1e-12)
+    got = pressure_gradient(12.0, R, 1500.0, beta=math.pi / 2.0, g=9.80665,
+                            flow_sign=1.0)
+    assert got == pytest.approx(-2.0 * 12.0 / R, rel=1e-12)
+
+
+def test_static_column_gradient_is_pure_hydrostatic():
+    rho, g = 1500.0, 9.80665
+    assert pressure_gradient(0.0, R, rho, beta=0.0, g=g) == pytest.approx(rho * g)
 
 
 def test_solve_tau_w_rejects_negative_rate():
