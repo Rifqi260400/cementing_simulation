@@ -208,3 +208,15 @@ def test_closed_form_reduces_to_the_power_law_result(n):
     for tau_w in (0.5, 10.0, 200.0):
         want = math.pi * R**3 * n / (3.0 * n + 1.0) * (tau_w / k) ** (1.0 / n)
         assert flow_rate(fluid, R, tau_w) == pytest.approx(want, rel=1e-13)
+
+
+def test_no_bracket_error_is_raised_for_an_unreachable_flow_rate(monkeypatch):
+    """A target Q that the bracket search cannot reach must raise, not hang."""
+    import inpipe.velocity as vel
+
+    fluid = Fluid("hb", rho=1400.0, tau0=3.0, k=0.6, n=0.55)
+    # Cap the geometric expansion at a single step so no bracket can be found
+    # for a large target, then confirm the failure is explicit.
+    monkeypatch.setattr(vel, "_BRACKET_MAX_ITER", 1)
+    with pytest.raises(NoBracketError, match="no upper bracket found"):
+        vel.solve_tau_w(1.0e6, fluid, R)

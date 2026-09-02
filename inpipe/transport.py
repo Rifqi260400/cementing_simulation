@@ -287,6 +287,10 @@ def _apply_transverse_redistribution(
     composition.  Because ``sum_c D_c A_c = 0`` the exchange balances exactly,
     so every fluid's total volume and the partition ``sum_i f_i = 1`` are both
     preserved to round-off.
+
+    That balance is what the solver's ``enforce_discrete_continuity`` option
+    guarantees (assumption A-22).  Without it the mapped velocities integrate to
+    ``Q`` only to ~4e-6, and this closure conserves only to the same order.
     """
     donor = np.where(div_u < 0.0, -div_u, 0.0)  # lateral outflow rate
     receiver = np.where(div_u > 0.0, div_u, 0.0)  # lateral inflow rate

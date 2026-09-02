@@ -174,3 +174,51 @@ outermost layers hold 31 % of the leftover mud on 7 % of the area.
 All geometric identities are **exact**, not convergent: cell areas and centroids
 come from closed-form circular-segment integrals, so refining the mesh does not
 improve the area sum — it was already at round-off.
+
+`pytest -q` runs all 128 tests, field gate included, in about two minutes.
+
+---
+
+## Phase 1 definition of done
+
+| requirement | status |
+|---|---|
+| all five test gates green | 128 tests pass |
+| parabolic stretching reproduced | front matches `z₀ + u(r)t` to **0.16 cells** (1.6 mm at `Δz = 10 mm`); tip speed **1.9876 ū** against the analytical 2 |
+| smearing quantified as `Dm_num` | measured at four resolutions, matching the upwind modified equation to ~2 %; see the table above |
+| 200 m case under 5 min | **77 s** of the 300 s budget (200 × 13 × 18, 46 800 cells, 1258 steps, 61 ms/step) |
+| mass conservation to rel 1e-10 on that case | **1.9e-15**, with sum-to-one at 2.0e-15 and `f` inside [0, 1] |
+| `docs/assumptions.md` populated | 22 entries, each with justification and sensitivity status |
+| plot reproducing the Fig. 5(a) centre-plane view | `results/fig5a_centre_plane.png` |
+
+### Figures produced
+
+| file | what it shows |
+|---|---|
+| `results/fig5a_centre_plane.png` | the paper's Fig. 5(a) view — parabolic front at three times |
+| `results/velocity_profile.png` | axial velocity along the centreline (Fig. 3c view) |
+| `results/lab_diagnostics.png` | conservation, boundedness, sum-to-one for the lab case |
+| `results/field_cement_snapshots.png` | cement front developing through the 200 m job |
+| `results/field_centre_plane.png` | all three fluids at end of job |
+| `results/field_outlet_history.png` | fluid fractions leaving the shoe |
+| `results/field_diagnostics.png` | field-scale conservation report |
+
+---
+
+## Where Phase 2 plugs in
+
+`inpipe/interface.py` is deliberately empty. To add a face-value scheme,
+register a function with the signature of `transport.upwind_faces` in
+`transport.FACE_SCHEMES`; the solver picks it up from
+`NumericsConfig.face_scheme` with no other change. The measured `Dm_num` table
+above is the baseline any new scheme has to beat.
+
+## Open question for the next phase
+
+The paper's Appendix A.2 says a sharp interface is "maintained by applying axial
+interface reconstruction to suppress numerical diffusion because of large axial
+grid size" — but never describes the scheme. That gap is the reason Phase 1
+stops at the upwind baseline rather than guessing at a reconstruction and
+calling it a replication. Deciding what to put in its place (donor–acceptor,
+THINC, or something else) is a modelling decision, not a transcription one, and
+it is the Phase 2 question.

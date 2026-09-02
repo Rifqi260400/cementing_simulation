@@ -98,7 +98,7 @@ def main() -> None:
     print(f"\nnumerical diffusion at dz = {g.dz:.4g} m, dt = {dt:.4g} s:")
     print(f"  paper's estimate dx^2/dt      = {g.dz**2 / dt:.4e} m^2/s")
     print(f"  upwind modified equation      = {upwind_diffusivity(u_c, g.dz, dt):.4e} m^2/s")
-    print(f"  physical Dm (Debacq/Alba)     = 1e-4 to 1e-3 m^2/s")
+    print("  physical Dm (Debacq/Alba)     = 1e-4 to 1e-3 m^2/s")
 
     plot_diagnostics(result, path=OUT / "lab_diagnostics.png")
     print(f"wrote {OUT / 'lab_diagnostics.png'}")

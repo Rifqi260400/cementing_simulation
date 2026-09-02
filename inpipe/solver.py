@@ -19,7 +19,6 @@ the casing) and ``z = L`` the shoe.  See :mod:`inpipe.velocity`.
 
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -46,7 +45,12 @@ __all__ = ["Diagnostics", "SimulationResult", "InPipeSolver"]
 
 @dataclass
 class Diagnostics:
-    """Time series recorded every ``NumericsConfig.diagnostics_every`` steps."""
+    """Solver time series.
+
+    Most fields are recorded every ``NumericsConfig.diagnostics_every`` steps.
+    ``dt``, ``dm_num_paper`` and ``dm_num_scheme`` are recorded once *per step*,
+    so those three lists are longer than the rest.
+    """
 
     time: list[float] = field(default_factory=list)
     step: list[int] = field(default_factory=list)
@@ -261,13 +265,19 @@ class InPipeSolver:
 
     # -- time loop ----------------------------------------------------------
 
-    def step(self, dt: float | None = None) -> float:
-        """Advance one timestep.  Returns the timestep actually taken [s]."""
+    def step(self, dt: float | None = None, u: np.ndarray | None = None) -> float:
+        """Advance one timestep.  Returns the timestep actually taken [s].
+
+        ``u`` may be passed in when the caller has already built the velocity
+        field for this instant (as :meth:`run` does, to size the timestep);
+        otherwise it is computed here.
+        """
         t0 = time.perf_counter()
         num = self.config.numerics
 
         q = self.schedule.rate_at(self.t)
-        u = self.velocity_field(q)
+        if u is None:
+            u = self.velocity_field(q)
 
         dt_max = cfl_timestep(u, self.grid.dz, num.cfl)
         dt = dt_max if dt is None else dt
@@ -382,7 +392,7 @@ class InPipeSolver:
             self.diagnostics.dm_num_scheme.append(
                 upwind_diffusivity(float(np.max(np.abs(u))), self.grid.dz, dt)
             )
-            self.step(dt)
+            self.step(dt, u=u)
             check_sum_to_one(self.f, atol=num.sum_to_one_atol)
             check_bounded(self.f, atol=num.boundedness_atol)
             if self.n_steps % num.diagnostics_every == 0:
