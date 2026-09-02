@@ -333,7 +333,6 @@ class InPipeSolver:
         d.f_min.append(float(self.f.min()))
         d.f_max.append(float(self.f.max()))
         d.sum_to_one_error.append(float(np.max(np.abs(self.f.sum(axis=0) - 1.0))))
-        dt = self.diagnostics.dt[-1] if self.diagnostics.dt else float("nan")
         d.courant.append(getattr(self, "_last_courant", float("nan")))
         d.wall_time_per_step.append(getattr(self, "_last_wall", float("nan")))
 
@@ -352,10 +351,7 @@ class InPipeSolver:
         out = np.full(flat.shape[1], np.nan)
         for c in range(flat.shape[1]):
             col = flat[:, c]
-            if col[0] < 0.5 or col[-1] > 0.5:
-                # No downward 0.5 crossing in this column.
-                if col.max() < 0.5 or col.min() > 0.5:
-                    continue
+            # Last downward crossing of 0.5: the leading edge of this fluid.
             idx = np.nonzero((col[:-1] >= 0.5) & (col[1:] < 0.5))[0]
             if idx.size == 0:
                 continue

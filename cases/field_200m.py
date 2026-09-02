@@ -79,7 +79,8 @@ def main() -> None:
             result, fluid_index=result.fluids.index(fl), ax=ax,
             title=f"{fl.name}  ($t$ = {result.time:.0f} s)", show_front=False,
         )
-    fig.suptitle("200 m x 5 in vertical casing, 5 bpm - centre-plane concentrations", y=1.0)
+    fig.suptitle("200 m x 5 in vertical casing, 5 bpm - centre-plane concentrations "
+                 "at end of job", y=1.0)
     fig.tight_layout()
     fig.savefig(OUT / "field_centre_plane.png", dpi=150, bbox_inches="tight")
     print(f"\nwrote {OUT / 'field_centre_plane.png'}")
@@ -94,9 +95,39 @@ def main() -> None:
     plot_diagnostics(result, path=OUT / "field_diagnostics.png")
     print(f"wrote {OUT / 'field_diagnostics.png'}")
 
-    # Displacement efficiency: fraction of the pipe swept by the lead fluid.
-    i_cem = result.fluids.index(CEMENT)
+    # Snapshots through the job show the parabolic front developing before the
+    # core breaks through; the end-of-job frame alone is degenerate, because at
+    # 2 u_bar the tip travels ~620 m in a 200 m pipe.
+    solver2, _ = build()
+    i_cem = solver2.fluids.index(CEMENT)
+    snaps = (0.25, 0.45, 0.70, 1.00)
+    fig, axes = plt.subplots(len(snaps), 1, figsize=(11, 2.4 * len(snaps)))
+    for ax, frac in zip(axes, snaps):
+        snap = solver2.run(t_end=frac * schedule.total_time)
+        plot_centre_plane(
+            snap, fluid_index=i_cem, ax=ax,
+            title=f"cement, $t$ = {snap.time:.0f} s "
+                  f"({100 * frac:.0f} % of job)", show_front=False,
+        )
+    fig.suptitle("Cement front development, 200 m x 5 in vertical casing at 5 bpm", y=1.0)
+    fig.tight_layout()
+    fig.savefig(OUT / "field_cement_snapshots.png", dpi=150, bbox_inches="tight")
+    print(f"wrote {OUT / 'field_cement_snapshots.png'}")
+
+    # Near-wall retention: with a purely concentric laminar profile and no
+    # mixing, the outermost layers barely move, so the mud they hold is never
+    # displaced.  Report how much of the residual sits there.
+    i_mud = result.fluids.index(MUD)
     cv = result.grid.cell_volume
+    mud_per_layer = (result.fractions[i_mud] * cv).sum(axis=(0, 2))
+    total_mud = mud_per_layer.sum()
+    edge = mud_per_layer[0] + mud_per_layer[-1]
+    print(f"\nresidual mud left in pipe          : {total_mud:.4e} m^3")
+    print(f"  of which in the two wall layers  : {edge / total_mud * 100:.1f} %")
+    print(f"  (2 of {result.grid.n_layer} layers, "
+          f"{200 * cv[0].sum() / cv.sum():.1f} % of the cross-sectional area)")
+
+    # Displacement efficiency: fraction of the pipe swept by the lead fluid.
     swept = float((result.fractions[i_cem] * cv).sum()) / (cv.sum() * result.grid.n_axial)
     print(f"\ncement fraction in pipe at end of job: {swept:.4f}")
 

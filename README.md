@@ -149,6 +149,16 @@ yield-stress fluid (+1.38 %; Newtonian +0.54 %, power-law `n = 0.4` +0.71 %).
 Exact per-cell area averaging is the default instead, at 4e-6 relative error and
 negligible run-time cost.
 
+**And one thing that held up better than expected.** Uniform spacing in the
+chord coordinate `y` leaves the near-wall layers thin and under-resolved, which
+looked like a threat to displacement efficiency — the residual sits near the
+wall. It is not: on the 200 m case, efficiency moves only 87.65 → 87.37 →
+87.29 % across a 4× refinement in `n_layer`, and an entirely different layering
+rule (`equal_area`) lands at 87.42 %. The residual volume is set by the integral
+of the parabolic profile, not by how the wall region is cut. What *does* stay
+resolution-sensitive is where the residual sits: at `n_layer = 13` the two
+outermost layers hold 31 % of the leftover mud on 7 % of the area.
+
 ---
 
 ## Test gates

@@ -55,7 +55,6 @@ numbers below are why the third is the default:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
@@ -171,7 +170,6 @@ def advect(
     face_scheme="upwind",
     inlet_value=0.0,
     divergence_correction: bool = True,
-    area: np.ndarray | None = None,
 ) -> np.ndarray:
     """One explicit Euler step of axial advection.
 
@@ -186,11 +184,13 @@ def advect(
     face_scheme : name or callable returning interior face values.
     inlet_value : Dirichlet value carried in through the ``z = 0`` face.
         Scalar or an array broadcastable to a cross-section.
-    divergence_correction : subtract ``f * div(u)`` so that a set of fields
-        summing to one keeps summing to one (assumption A-07).
-    area : cell cross-sectional area, ``(n_layer, n_azimuth)``.  Only needed
-        for the record; the update is area-independent for a uniform-ID pipe
-        because the same area divides out of flux and volume.
+    divergence_correction : subtract ``f * div(u)``, i.e. integrate the
+        advective form.  This is what Eq. A.20 states for the mixing status
+        ``s``; for volume fractions see the transverse closures in
+        :func:`advect_multi` (assumption A-07).
+
+    The update needs no cell area: for a uniform-ID pipe the same area divides
+    out of the face flux and the cell volume.
 
     Returns the updated field; ``f`` is not modified.
     """
@@ -200,12 +200,14 @@ def advect(
     u_int = _face_velocities(u_cells)
     f_int = scheme(f, u_int, dz, dt)
 
-    # Boundary faces.  Inlet at z = 0: Dirichlet on inflow, upwind on outflow.
-    # Outlet at z = L: zero-gradient outflow (assumption A-18).
+    # Boundary faces (assumption A-18).  Inlet at z = 0: Dirichlet on inflow,
+    # upwind on outflow.  Outlet at z = L: zero-gradient in both directions, so
+    # a reversed outlet face draws the last cell's own composition rather than
+    # injecting anything new.
     u_in = u_cells[0]
     u_out = u_cells[-1]
     f_in = np.where(u_in >= 0.0, np.broadcast_to(inlet_value, u_in.shape), f[0])
-    f_out = np.where(u_out >= 0.0, f[-1], np.broadcast_to(inlet_value, u_out.shape))
+    f_out = f[-1]
 
     # Assemble face velocities and face values including boundaries.
     uf = np.concatenate([u_in[None, ...], u_int, u_out[None, ...]], axis=0)
@@ -360,12 +362,3 @@ def upwind_diffusivity(u: float, dz: float, dt: float) -> float:
     """
     courant = abs(u) * dt / dz
     return 0.5 * abs(u) * dz * (1.0 - courant)
-
-
-@dataclass
-class InterfaceMetrics:
-    """Measured spreading of an initially sharp interface in one column."""
-
-    front_position: float
-    thickness: float
-    effective_diffusivity: float

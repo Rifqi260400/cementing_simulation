@@ -430,3 +430,25 @@ def test_redistribute_requires_area_and_rejects_unknown_closures():
         advect_multi(fields, u, DZ, 1e-3, closure="redistribute")
     with pytest.raises(ValueError, match="unknown transverse closure"):
         advect_multi(fields, u, DZ, 1e-3, closure="magic", area=area)
+
+
+def test_outlet_is_zero_gradient_in_both_directions():
+    """A reversed outlet face must not inject the inlet fluid at the shoe."""
+    nz = 40
+    f = np.zeros(column(nz))
+    f[:20] = 1.0
+    u = np.full(column(nz), -0.5)  # everything flowing backwards
+    dt = CFL * DZ / 0.5
+    out = advect(f, u, DZ, dt, inlet_value=1.0)
+    # The last cell holds fluid 2 (f = 0) and draws its own composition back in,
+    # so it must stay at 0 rather than picking up the inlet's f = 1.
+    assert out[-1, 0, 0] == pytest.approx(0.0, abs=1e-15)
+
+
+def test_reversed_inlet_lets_fluid_leave_through_the_top():
+    nz = 40
+    f = np.full(column(nz), 1.0)
+    u = np.full(column(nz), -0.5)
+    out = advect(f, u, DZ, CFL * DZ / 0.5, inlet_value=0.0)
+    # Uniform field, uniform velocity: upwinding at both boundaries keeps it flat.
+    np.testing.assert_allclose(out, 1.0, rtol=0.0, atol=1e-15)

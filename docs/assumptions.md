@@ -18,7 +18,7 @@ quantifies the impact; `n/a` = the choice is exact, so there is nothing to vary.
 |----|-----------|--------------------------|-----------------|------------|----------------|---------------------|
 | A-01 | Eq. A.2 | `Q = ∫_A u(r) dA` | No quadrature rule; the integrand has a derivative discontinuity at the plug radius `r0` | Split the integral at `r0`: analytic plug term `B·π·r0²` plus `scipy.integrate.quad` on `r ∈ [r0, R]` (`epsrel=1e-13`) | Splitting keeps each piece smooth, so adaptive quadrature converges to machine precision. Verified against Buckingham–Reiner to rel 1e-8 and against Poiseuille / power-law peaks to rel 1e-10 | n/a (exact to stated tolerance) |
 | A-02 | Eq. A.7 | `dp/dz − ρ g cos β = 2 τ_w / R` | Sign convention for `z` is never stated | `+z` is the flow direction (downward inside casing for a vertical well); `β` is inclination from vertical, so `β = 0` ⇒ `cos β = 1` | A single convention stated in `velocity.py`'s module docstring and used everywhere. Getting this wrong silently inverts the hydrostatic term | n/a |
-| A-03 | §2.2, Fig. 2b/3a | Cross-section is cut by straight horizontal lines into layers | Layer spacing rule is not given | Uniform spacing in the vertical chord coordinate `y ∈ [−R, R]` | Simplest rule consistent with the figures. **Known consequence:** near-wall layers are thin in *area*, so they are under-resolved relative to the core. The rule is injected as a strategy (`GridConfig.layer_rule`) so an equal-area alternative can be swapped in without touching the solver | partially — `equal_area` alternative implemented and compared in `tests/test_grid.py` |
+| A-03 | §2.2, Fig. 2b/3a | Cross-section is cut by straight horizontal lines into layers | Layer spacing rule is not given | Uniform spacing in the vertical chord coordinate `y ∈ [−R, R]` | Simplest rule consistent with the figures. **Known consequence:** near-wall layers are thin in *area*, so they are under-resolved relative to the core. The rule is injected as a strategy (`GridConfig.layer_rule`) so an equal-area alternative can be swapped in without touching the solver | yes — see the convergence table below |
 | A-04 | §2.3 | 1D radial profile is applied "to the entire section axisymmetrically" | How the 1D `u(r)` is sampled onto finite-volume cells | **Exact per-cell area averaging** (`NumericsConfig.velocity_mapping = "area_average"`, the default). Centroid-radius evaluation is retained as `"centroid"` | The spec's baseline was centroid evaluation, with the rule "if the flow-rate error is worse than ~1 % at your working resolution, switch to area-averaged velocity". **It is worse.** Measured `Q` error at the paper's own 13 × 18 cross-section (Dai et al. §3.1 used a 100 × 13 × 18 mesh): Newtonian +0.54 %, power-law `n = 0.4` +0.71 %, Herschel-Bulkley `τ0 = 3 Pa` **+1.38 %** — the yield-stress case fails the gate, and it fails in the direction that matters (a systematic *over*-estimate of `Q`, because the centroid radius of a cell under-states its area-weighted mean radius while `u` is convex in `r`). Area averaging brings the error to 4 × 10⁻⁶ relative. Cost is kept negligible by precomputing an exact cell-by-annulus area matrix once (see A-20), so the mapping is one profile evaluation plus a matvec (~0.16 ms) per station per step | yes — both mappings measured at three resolutions for three rheologies; `tests/test_grid.py` prints the centroid errors on every run |
 | A-05 | Eq. A.9 | Explicit Euler in time | No stability constraint or Courant number is given | `Δt < CFL · Δz / max|u|` with `CFL = 0.4`, configurable via `NumericsConfig.cfl`; the condition is asserted every step and raises on violation | Explicit upwind advection is stable for `CFL ≤ 1`; 0.4 leaves margin for the velocity changing between steps as the effective fluid changes. Never clipped silently — a violation is a modelling error, not something to hide | no |
 | A-06 | §A.1 | "averaged rheological parameters and density of fluids are used" | The averaging rule is not specified | Volume-fraction-weighted arithmetic mean of `ρ`, `τ0`, `k` and `n` (`fluid.mix_fluids`) | The only rule the wording plainly supports. **Flagged as not physically rigorous for `n`:** the flow index is an exponent, not an extensive property, so a volume-weighted mean of `n` has no constitutive justification. A mixture of an `n = 0.4` and an `n = 1.0` fluid is *not* an `n = 0.7` fluid. Prime candidate for a sensitivity study | no |
@@ -30,6 +30,33 @@ quantifies the impact; `n/a` = the choice is exact, so there is nothing to vary.
 | ID | Paper ref | What the paper specifies | What is missing | Our choice | Justification | Sensitivity tested? |
 |----|-----------|--------------------------|-----------------|------------|----------------|---------------------|
 | A-07 | Eq. A.8/A.9 | Conservative finite-volume update of `f_i` | Nothing about what happens when the axial velocity profile varies with depth | **Transverse redistribution closure** (`NumericsConfig.transverse_closure = "redistribute"`, the default). The two alternatives, `"none"` (Eq. A.9 verbatim) and `"local"` (subtract `f·∇·u`, i.e. the advective form of Eq. 2), remain selectable | **This resolves a genuine inconsistency in the source model, not a transcription error.** With no transverse velocity, each `(layer, azimuth)` column carries its own axial velocity; when neighbouring stations hold different effective fluids their *profile shapes* differ, so a column has `∂u/∂z ≠ 0` even though every station passes the same `Q`. The discrete continuity condition `Σ_j u_j A_j = 0` then fails per cell, and the conservative update and the sum-to-one constraint become mutually incompatible. See the measured table below. The resolution: because `Σ_c (∇·u)_c A_c = 0` across the cross-section, the imbalance is a *redistribution*, not a source — columns losing volume axially shed it laterally carrying their own composition, and columns gaining volume receive the donor mixing-cup composition. Both invariants then hold to round-off. **Physical content, stated explicitly:** this assumes lateral redistribution is instantaneous and well-mixed across the section. That is a strong assumption, of the same character as the paper's own algorithmically-imposed segregation and instantaneous mixing — it is *not* a solved transverse velocity, and no momentum equation is involved. It is inert wherever `∇·u = 0`, so it changes nothing in any single-rheology case | yes — all three closures measured, see below |
+
+### Layer-spacing sensitivity (the A-03 result)
+
+Displacement efficiency on the 200 m field case (100 axial cells, mud →
+spacer → cement), varying both the layer count and the layering rule:
+
+| `n_layer` | rule | outermost two layers, % of area | residual mud [m³] | efficiency |
+|---|---|---|---|---|
+| 13 | `uniform_y` | 7.07 % | 0.3128 | 87.65 % |
+| 26 | `uniform_y` | 2.53 % | 0.3200 | 87.37 % |
+| 52 | `uniform_y` | 0.90 % | 0.3221 | 87.29 % |
+| 13 | `equal_area` | 15.38 % | 0.2921 | 88.47 % |
+| 26 | `equal_area` | 7.69 % | 0.3187 | 87.42 % |
+
+The headline number is **mesh-converged and rule-insensitive**: efficiency
+moves by 0.36 points across a 4× refinement in `n_layer` and lands in the same
+place from a completely different layering rule. That is because the residual
+volume is set by the integral of the parabolic profile, not by how the near-wall
+region is cut. So the concern flagged against `uniform_y` — thin, under-resolved
+near-wall layers — does **not** propagate to the aggregate result.
+
+What it does affect is the *radial distribution* of the residual. At
+`n_layer = 13` the two outermost layers hold 31 % of the leftover mud while
+covering only 7 % of the area; at `n_layer = 52` that concentration is spread
+over thinner layers. Any downstream use that cares where the residual sits
+(rather than how much there is) should refine `n_layer` or switch to
+`equal_area`; anything reading off a single efficiency number can use 13.
 
 ### The conservation dilemma and its resolution (the A-07 result)
 
