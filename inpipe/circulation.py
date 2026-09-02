@@ -29,6 +29,7 @@ when the well would tend to free-fall, but it does not drive the flow.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -58,17 +59,37 @@ __all__ = ["WellConfig", "CirculationResult", "CirculationSolver"]
 class WellConfig:
     """Geometry of a cased vertical well with an open-hole annulus."""
 
-    length: float               # measured depth to the shoe [m]
+    length: float               # length of the modelled interval [m]
     casing_id: float            # casing inner diameter [m]
     casing_od: float            # casing outer diameter [m]
     caliper: CaliperLog         # hole diameter against depth
     inclination: float = 0.0    # from vertical [rad]; 0 is vertical
+    #: Measured depth of the top of the modelled interval [m].  Zero models the
+    #: whole well from surface; set it to model only a deeper section, in which
+    #: case the column above is accounted for by ``head_above_*`` below.
+    top_depth: float = 0.0
+    #: Density of the fluid standing in the casing above ``top_depth``
+    #: [kg/m^3], and in the annulus above it.  Used only for the hydrostatic
+    #: head of the unmodelled column, so that shoe pressure and ECD stay true
+    #: depth quantities.  ``None`` leaves that column out and reports pressures
+    #: relative to ``top_depth`` instead.  The casing side also accepts
+    #: ``"auto"``, which volume-averages the fluids pumped through it so far -
+    #: the column starts as the in-situ fluid and turns over as the job runs.
+    rho_above_casing: float | str | None = None
+    rho_above_annulus: float | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 < self.casing_id < self.casing_od:
             raise ValueError(
                 f"need 0 < casing ID ({self.casing_id}) < casing OD ({self.casing_od})"
             )
+        if self.top_depth < 0.0:
+            raise ValueError("top_depth must be non-negative")
+
+    @property
+    def shoe_depth(self) -> float:
+        """True measured depth of the shoe [m]."""
+        return self.top_depth + self.length
 
     @property
     def casing_radius(self) -> float:
@@ -165,7 +186,8 @@ class CirculationSolver:
         self.surface_pressure = surface_pressure
 
         ann = annulus_grid or grid
-        self.casing_grid = Grid(well.casing_radius, well.length, grid)
+        self.casing_grid = Grid(well.casing_radius, well.length, grid,
+                                z_offset=well.top_depth)
         self.annulus_grid = AnnulusGrid(
             length=well.length,
             casing_od=well.casing_od,
@@ -173,6 +195,7 @@ class CirculationSolver:
             n_axial=ann.n_axial,
             n_layer=ann.n_layer,
             n_azimuth=ann.n_azimuth,
+            z_offset=well.top_depth,
         )
 
         fluids = [initial_fluid]
@@ -342,6 +365,7 @@ class CirculationSolver:
                               profiles=self._annulus_profiles(q))
         casing_params = self._effective(self.f_casing, self.casing_grid.cell_volume,
                                         self._params)
+        rho_above_casing = self._rho_above_casing()
         annulus_params = self._effective(self.f_annulus, self.annulus_grid.cell_volume,
                                          self._params)
         casing_tau_w = []
@@ -365,7 +389,46 @@ class CirculationSolver:
             inclination=self.well.inclination,
             gravity=self.gravity,
             surface_pressure=self.surface_pressure,
+            top_depth=self.well.top_depth,
+            rho_above_casing=rho_above_casing,
+            rho_above_annulus=self.well.rho_above_annulus,
         )
+
+    def _rho_above_casing(self):
+        """Density of the casing column above the modelled interval [kg/m^3].
+
+        With ``"auto"`` the column is volume-averaged over what has been pumped
+        through it: it starts as the in-situ fluid and turns over once the
+        pumped volume exceeds the bore volume above ``top_depth``.  Treating it
+        as plug flow slightly sharpens the turnover, but the head it produces is
+        a volume average either way.
+        """
+        setting = self.well.rho_above_casing
+        if setting != "auto":
+            return setting
+        bore = math.pi * (0.5 * self.well.casing_id) ** 2 * self.well.top_depth
+        if bore <= 0.0:
+            return None
+        pumped = 0.0
+        remaining = bore
+        rho = 0.0
+        # Walk the schedule backwards from now: the fluid nearest the top of the
+        # interval is the oldest still inside the column above.
+        t = min(self.t, self.schedule.total_time)
+        for i in range(self.schedule.stage_index_at(t), -1, -1):
+            stage = self.schedule.stages[i]
+            start = self.schedule.stage_start(i)
+            elapsed = min(t, start + stage.duration) - start
+            volume = max(elapsed, 0.0) * stage.flow_rate
+            take = min(volume, remaining)
+            rho += take * stage.fluid.rho
+            remaining -= take
+            pumped += take
+            if remaining <= 0.0:
+                break
+        if remaining > 0.0:  # the column is not yet fully displaced
+            rho += remaining * self.fluids[0].rho
+        return rho / bore
 
     def record(self, snapshot=False):
         h = self._history

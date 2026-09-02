@@ -218,6 +218,10 @@ class Grid:
     config: GridConfig
     #: Number of annular bins used to build the exact area-averaging weights.
     n_radial: int = 1024
+    #: Measured depth of the top of the modelled interval [m].  Non-zero when
+    #: only a sub-interval of the well is modelled, so that ``z_centers`` stay
+    #: true depths.
+    z_offset: float = 0.0
 
     def __post_init__(self) -> None:
         R, cfg = self.radius, self.config
@@ -228,7 +232,9 @@ class Grid:
 
         # --- axial ---------------------------------------------------------
         self.dz = self.length / self.n_axial
-        self.z_faces = np.linspace(0.0, self.length, self.n_axial + 1)
+        self.z_faces = np.linspace(
+            self.z_offset, self.z_offset + self.length, self.n_axial + 1
+        )
         self.z_centers = 0.5 * (self.z_faces[:-1] + self.z_faces[1:])
 
         # --- cross-section -------------------------------------------------

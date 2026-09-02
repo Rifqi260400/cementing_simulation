@@ -349,3 +349,107 @@ def test_washouts_do_not_degrade_efficiency_in_this_model(smooth_caliper, calipe
     assert results["rough"] >= results["smooth"] - 1e-3, results
     # Both are respectable, so the comparison is between sane numbers.
     assert all(0.7 < v < 1.0 for v in results.values()), results
+
+
+# --- modelling only a sub-interval of the well ------------------------------
+
+
+def test_top_depth_keeps_true_depths_and_samples_the_caliper_there(caliper):
+    """A sub-interval model must not renumber depth from zero.
+
+    The caliper is a function of true depth, and ECD divides by it, so an
+    interval starting at 175 m has to know that.
+    """
+    top = 60.0
+    well = WellConfig(LENGTH - top, CASING_ID, CASING_OD, caliper, top_depth=top)
+    assert well.shoe_depth == pytest.approx(LENGTH)
+    solver = CirculationSolver(
+        well, PumpSchedule([PumpStage(CEMENT, 1.0, bpm_to_m3s(5.0))]),
+        initial_fluid=MUD,
+        grid=GridConfig(n_axial=30, n_layer=5, n_azimuth=4),
+    )
+    cg, ag = solver.casing_grid, solver.annulus_grid
+    assert cg.z_faces[0] == pytest.approx(top)
+    assert cg.z_faces[-1] == pytest.approx(LENGTH)
+    assert ag.z_centers.min() > top and ag.z_centers.max() < LENGTH
+    # The hole diameters must match the caliper at those true depths.
+    np.testing.assert_allclose(
+        ag.hole_diameter, caliper.diameter_at(ag.z_centers), rtol=1e-12
+    )
+
+
+def test_head_above_the_interval_restores_true_depth_pressures():
+    """Without the column above, ECD at the shoe is badly understated."""
+    n, top = 60, 175.0
+    length = 211.75
+    dz = length / n
+    z = np.linspace(top + 0.5 * dz, top + length - 0.5 * dz, n)
+    rho = np.full(n, 1200.0)
+    kwargs = dict(
+        casing_z=z, casing_dz=dz, casing_rho=rho, casing_tau_w=np.zeros(n),
+        casing_radius=0.5 * CASING_ID, annulus_z=z[::-1], annulus_dz=dz,
+        annulus_rho=rho, annulus_tau_w=np.zeros(n),
+        annulus_half_gap=np.full(n, 0.022), gravity=9.80665, top_depth=top,
+    )
+    with_column = circulation_pressure(
+        rho_above_casing=1200.0, rho_above_annulus=1200.0, **kwargs
+    )
+    without = circulation_pressure(**kwargs)
+    assert with_column.ecd_at_shoe == pytest.approx(1200.0, rel=1e-9)
+    assert with_column.shoe_pressure == pytest.approx(
+        1200.0 * 9.80665 * (top + length), rel=1e-9
+    )
+    assert with_column.pump_pressure == pytest.approx(0.0, abs=1e-9)
+    assert without.ecd_at_shoe < 0.7 * with_column.ecd_at_shoe
+    assert with_column.top_depth == pytest.approx(top)
+
+
+def test_auto_column_above_turns_over_as_the_job_runs(caliper):
+    """The casing above starts as the in-situ fluid and becomes the pumped one."""
+    top = 100.0
+    well = WellConfig(LENGTH - top, CASING_ID, CASING_OD, caliper, top_depth=top,
+                      rho_above_casing="auto", rho_above_annulus=MUD.rho)
+    bore = math.pi * (0.5 * CASING_ID) ** 2 * top
+    q = bpm_to_m3s(5.0)
+    solver = CirculationSolver(
+        well, PumpSchedule([PumpStage(CEMENT, bore * 10.0, q)]), initial_fluid=MUD,
+        grid=GridConfig(n_axial=30, n_layer=5, n_azimuth=4),
+    )
+    assert solver._rho_above_casing() == pytest.approx(MUD.rho, rel=1e-12)
+    solver.t = 0.5 * bore / q          # half the column turned over
+    mid = solver._rho_above_casing()
+    assert MUD.rho < mid < CEMENT.rho
+    assert mid == pytest.approx(0.5 * (MUD.rho + CEMENT.rho), rel=1e-9)
+    solver.t = 3.0 * bore / q          # fully turned over
+    assert solver._rho_above_casing() == pytest.approx(CEMENT.rho, rel=1e-12)
+
+
+def test_local_efficiency_is_confounded_by_arrival_order(caliper):
+    """Why a raw washout-vs-gauge comparison cannot be trusted.
+
+    Annular flow is upward, so a shallow cell is reached last and reads low at
+    the end of the job whatever its diameter.  Local efficiency therefore
+    correlates strongly with depth, and comparing washouts against gauge hole
+    without controlling for that measures where the front happens to be - it
+    can and does flip the sign of the conclusion.
+
+    On the K-GEP-1 interval the raw comparison says washouts are worse (0.880
+    against 0.939) purely because the big washout sits near the top; comparing
+    within depth bands reverses it (0.818 vs 0.775 shallow, 0.995 vs 0.978
+    deep).  The case script reports both, and this test pins the confound so
+    the raw number is never read on its own.
+    """
+    solver, schedule = build_solver(caliper, n_axial=60, n_layer=5, n_azimuth=4)
+    r = solver.run(t_end=schedule.total_time)
+    g = r.annulus_grid
+    order = np.argsort(g.z_centers)
+    z = g.z_centers[order]
+    vol = g.cell_volume.sum(axis=(1, 2))[order]
+    i_cem = r.fluids.index(CEMENT)
+    eff = (r.annulus_fractions[i_cem] * g.cell_volume).sum(axis=(1, 2))[order] / vol
+
+    assert eff[0] < eff[-1], "the shallow end must lag the deep end"
+    assert np.corrcoef(z, eff)[0, 1] > 0.8, "expected a strong depth trend"
+    # Deep cells are essentially fully swept, shallow ones are not.
+    assert eff[-5:].mean() > 0.95
+    assert eff[:5].mean() < eff[-5:].mean()

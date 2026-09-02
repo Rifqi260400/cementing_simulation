@@ -66,12 +66,18 @@ class AnnulusGrid:
     #: surface, so annular flow runs along increasing index and the shared 1D
     #: advection kernel applies unchanged.  Depths therefore descend.
     flow_order: bool = True
+    #: Measured depth of the top of the modelled interval [m].  The caliper is
+    #: sampled at true depth, so this must be right when only part of the well
+    #: is modelled.
+    z_offset: float = 0.0
 
     def __post_init__(self) -> None:
         if self.casing_od <= 0.0:
             raise ValueError("casing OD must be positive")
         self.dz = self.length / self.n_axial
-        self.z_faces = np.linspace(0.0, self.length, self.n_axial + 1)
+        self.z_faces = np.linspace(
+            self.z_offset, self.z_offset + self.length, self.n_axial + 1
+        )
         if self.flow_order:
             self.z_faces = self.z_faces[::-1].copy()
         self.z_centers = 0.5 * (self.z_faces[:-1] + self.z_faces[1:])

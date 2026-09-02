@@ -42,19 +42,32 @@ therefore **structurally inactive** and are deliberately not implemented.
 ## Full circulation: cement down the casing, up the annulus
 
 ```bash
-.venv/bin/python -m cases.circulation                     # bundled K-GEP-1 log
+.venv/bin/python -m cases.circulation                     # 175 m to the shoe
+.venv/bin/python -m cases.circulation --top-depth 0       # whole logged interval
 .venv/bin/python -m cases.circulation --caliper my.las    # your own log
 .venv/bin/python -m cases.circulation --synthetic         # no log needed
 ```
 
 Runs on the real caliper log in `data/K-GEP-1_composite.las` — a 390 m
 composite log with the borehole-diameter curve in inches. The well depth, the
-gauge hole size and the annular geometry all come from it: **386.75 m** of
-**7 in casing** (6.184 in ID, 29 lb/ft — the standard string for the log's
-10.43 in gauge hole) in an open hole that ranges 8.15–24.0 in. The well starts
-full of mud; cement is pumped from surface with no spacer, turns at the shoe,
-and displaces mud up the annulus. Produces `results/field_circulation.mp4`, the
-section snapshots and the pressure history.
+gauge hole size and the annular geometry all come from it.
+
+**Modelled interval: 175 m to the shoe at 386.75 m** — the open hole only.
+Above 175 m the log reads a near-constant 10.43 in (standard deviation 0.007 in
+over 17 000 samples, against 3.05 in below 195 m), which is not rock, so that
+section is very likely cased and its annulus is not an open hole. `--top-depth 0`
+models the whole logged interval instead.
+
+**7 in casing** (6.184 in ID, 29 lb/ft — the standard string for a 10.43 in
+gauge hole) in an open hole that ranges 8.15–24.0 in. The well starts full of
+mud; cement is pumped with no spacer, turns at the shoe, and displaces mud up
+the annulus.
+
+The column above the modelled interval is still accounted for hydrostatically,
+so shoe pressure and ECD stay true-depth quantities: the annulus above is taken
+to remain mud, the casing above is volume-averaged over what has been pumped
+through it. Friction above the interval is not included, so pump pressure is a
+lower bound by that amount.
 
 The log is **wrapped** (`WRAP. YES`), declares `NULL = -99999`, and carries
 non-UTF8 bytes in a curve description — all handled. Its units come from the
@@ -67,17 +80,36 @@ says so. Nothing is trimmed silently — `--keep-tail` leaves it in.
 
 ### Results on this well
 
-| | |
-|---|---|
-| annular displacement efficiency | **87.4 %** |
-| annulus volume | 15.15 m³, **+29 %** over an in-gauge hole |
-| ECD at shoe | 1242 → 1847 kg/m³ over the job |
-| U-tube imbalance | peaks at **18.6 bar (270 psi)**; free-fall for **92 %** of the job |
-| conservation | sum-to-one 1.3e-13, volume 7.9e-16 |
+| | 175–386.75 m (default) | whole logged interval |
+|---|---|---|
+| annular displacement efficiency | **89.9 %** | 87.4 % |
+| annulus volume | 10.19 m³, **+59 %** over an in-gauge hole | 15.15 m³, +29 % |
+| job | 15.0 m³ cement, 18.9 min at 5 bpm | 23.8 m³, 29.9 min |
+| ECD at shoe | 1222 → 1582 kg/m³ | 1242 → 1847 kg/m³ |
+| U-tube imbalance | peaks at **21.8 bar (316 psi)**, free-fall **99 %** of the job | 18.6 bar, 92 % |
+| conservation | sum-to-one 1.6e-13, volume 1.1e-15 | 1.3e-13, 7.9e-16 |
 
-Washed-out sections (> 1.3 × gauge, 7 % of the well) reach **94.9 %** local
-efficiency against **84.7 %** elsewhere — the profile-flattening effect
-described below, now on real geometry.
+### Do not read the raw washout comparison
+
+Local efficiency correlates strongly with depth — annular flow is upward, so a
+shallow cell is simply *reached last* and reads low at the end of the job
+whatever its diameter. On this interval efficiency runs from 0.62 at 175 m to
+0.997 at 373 m for that reason alone.
+
+So a raw washout-vs-gauge comparison measures where the front is, not the
+geometry, **and it flips the sign of the conclusion**: raw, it says washouts are
+worse (0.880 vs 0.939); within depth bands the picture is mixed and dominated by
+the shallowest band, where the washout is far *ahead* (0.812 vs 0.669). The case
+prints both, and a test pins the confound so the raw number is never read alone.
+
+The one exact statement is the mechanism, verified analytically: a wider gap
+flows slower, the yield stress takes a larger share of the stress budget, the
+plug grows from 30 % to 63 % of the gap, and the profile flattens from
+`u_max/ū` = 1.25 to 1.12 — which displaces *better*. Whether that outweighs the
+extra volume a washout holds depends on the well, and on this one it is close.
+**Either way, the mechanisms that make real washouts fail — eccentricity,
+density segregation into the cavity, mud stranded below its yield stress — are
+all outside this phase.**
 
 The annulus is solved by the **parallel-plate (slot) approximation**, which is
 what the source paper says its own annulus model uses (Appendix A.1:

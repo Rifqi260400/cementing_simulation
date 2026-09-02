@@ -196,7 +196,7 @@ def animate_circulation(result, path, fluid_index=None, fps=12, dpi=120,
         c0, a0 = profiles(snap0)
         (line_c,) = ax_prof.plot(c0, cg.z_centers, label=f"casing")
         (line_a,) = ax_prof.plot(a0, z_a, label="annulus")
-        ax_prof.set_ylim(cg.length, 0.0)
+        ax_prof.set_ylim(cg.z_faces[-1], cg.z_faces[0])
         ax_prof.set_xlim(-0.03, 1.03)
         ax_prof.set_xlabel(f"{name} fraction (area-averaged)")
         ax_prof.set_ylabel("depth [m]")

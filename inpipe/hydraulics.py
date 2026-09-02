@@ -62,6 +62,9 @@ class HydraulicsReport:
     #: Equivalent static density of the annular column [kg/m^3].
     esd_at_shoe: float
     gravity: float
+    #: Depth of the top of the modelled interval [m]; 0 when the whole well is
+    #: modelled from surface.
+    top_depth: float = 0.0
 
     @property
     def utube_imbalance(self) -> float:
@@ -97,7 +100,14 @@ class HydraulicsReport:
 
     def summary(self) -> str:
         ppg = 0.45359237 / (0.158987294928 / 42.0)  # kg/m^3 per ppg
-        lines = [
+        lines = []
+        if self.top_depth > 0.0:
+            lines.append(
+                f"modelled interval : {self.top_depth:.1f} m to "
+                f"{self.annulus_depth[-1]:.1f} m "
+                f"(static head above included; friction above is not)"
+            )
+        lines += [
             f"pump pressure     : {self.pump_pressure / 1e5:8.2f} bar "
             f"({self.pump_pressure / 6894.757:7.1f} psi)",
             f"shoe pressure     : {self.shoe_pressure / 1e5:8.2f} bar "
@@ -122,6 +132,7 @@ def circulation_pressure(
     casing_z, casing_dz, casing_rho, casing_tau_w, casing_radius,
     annulus_z, annulus_dz, annulus_rho, annulus_tau_w, annulus_half_gap,
     inclination=0.0, gravity=9.80665, surface_pressure=0.0,
+    top_depth=0.0, rho_above_casing=None, rho_above_annulus=None,
 ) -> HydraulicsReport:
     """Integrate pressure down the casing and back up the annulus.
 
@@ -131,6 +142,16 @@ def circulation_pressure(
     Wall-shear-to-gradient relations are the paper's own (Appendix A.1):
     ``P = 2 tau_w / R`` in the pipe, ``P = tau_w / b`` in the slot, since
     ``tau_w = (h/2) P`` with ``h = 2b``.
+
+    Modelling only part of a well
+    -----------------------------
+    When ``top_depth > 0`` the arrays cover a deeper interval only.  The static
+    head of the column above it is then added from ``rho_above_casing`` and
+    ``rho_above_annulus``, so shoe pressure and ECD remain true-depth
+    quantities.  Friction above the interval is *not* included - it is unknown
+    without that section's geometry - so pump pressure is a lower bound by that
+    amount.  Leaving either density as ``None`` drops that leg's column and
+    reports its pressures relative to ``top_depth``.
     """
     cosb = math.cos(inclination)
     casing_rho = np.asarray(casing_rho, dtype=float)
@@ -143,9 +164,16 @@ def circulation_pressure(
     casing_fric_grad = 2.0 * casing_tau_w / casing_radius
     casing_hydro = float((casing_rho * gravity * cosb * casing_dz).sum())
     casing_friction = float((casing_fric_grad * casing_dz).sum())
+    head_above_casing = (
+        0.0 if rho_above_casing is None
+        else rho_above_casing * gravity * cosb * top_depth
+    )
+    casing_hydro += head_above_casing
     dP = (casing_rho * gravity * cosb - casing_fric_grad) * casing_dz
-    casing_pressure = surface_pressure + np.cumsum(dP) - 0.5 * dP  # cell centres
-    shoe_pressure = surface_pressure + float(dP.sum())
+    casing_pressure = (
+        surface_pressure + head_above_casing + np.cumsum(dP) - 0.5 * dP
+    )  # cell centres
+    shoe_pressure = surface_pressure + head_above_casing + float(dP.sum())
 
     # --- annulus: flow along -z, so friction adds ---------------------------
     order = np.argsort(np.asarray(annulus_z, dtype=float))
@@ -154,9 +182,16 @@ def circulation_pressure(
     fric_grad_a = annulus_tau_w[order] / annulus_half_gap[order]
     annulus_hydro = float((rho_a * gravity * cosb * annulus_dz).sum())
     annulus_friction = float((fric_grad_a * annulus_dz).sum())
+    head_above_annulus = (
+        0.0 if rho_above_annulus is None
+        else rho_above_annulus * gravity * cosb * top_depth
+    )
+    annulus_hydro += head_above_annulus
     dPa = (rho_a * gravity * cosb + fric_grad_a) * annulus_dz
     # Integrate downward from the surface return, which is at the reference.
-    annulus_pressure = surface_pressure + np.cumsum(dPa) - 0.5 * dPa
+    annulus_pressure = (
+        surface_pressure + head_above_annulus + np.cumsum(dPa) - 0.5 * dPa
+    )
 
     # Pump pressure closes the loop: what surface must supply so that the
     # annulus returns to the reference pressure.
@@ -165,6 +200,7 @@ def circulation_pressure(
     )
 
     shoe_depth = float(z_a[-1] + 0.5 * annulus_dz)
+    top_annulus_pressure = surface_pressure + head_above_annulus
     return HydraulicsReport(
         casing_depth=np.asarray(casing_z, dtype=float),
         casing_pressure=casing_pressure + pump_pressure,
@@ -183,4 +219,5 @@ def circulation_pressure(
             surface_pressure + annulus_hydro, shoe_depth, gravity
         ),
         gravity=gravity,
+        top_depth=float(top_depth),
     )

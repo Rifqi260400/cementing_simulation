@@ -6,9 +6,24 @@ size and the annular geometry all come from that log.
 
 Run::
 
-    python -m cases.circulation                       # the bundled log
+    python -m cases.circulation                       # 175 m to the shoe
+    python -m cases.circulation --top-depth 0         # the whole logged interval
     python -m cases.circulation --caliper my.las      # your own log
     python -m cases.circulation --synthetic           # no log needed
+
+Modelled interval
+-----------------
+Only the open hole below ``--top-depth`` (175 m by default) is modelled.  Above
+it the bundled log reads a near-constant 10.43 in - a standard deviation of
+0.007 in over 17 000 samples, against 3.05 in in the section below - which is
+not rock, so that interval is very likely cased and its annulus is not an open
+hole (assumption A-33).
+
+The column above the interval is still accounted for hydrostatically, so shoe
+pressure and ECD stay true-depth quantities: the annulus above is taken to
+remain mud, and the casing above is volume-averaged over what has been pumped
+through it.  Friction above the interval is *not* included, so pump pressure is
+a lower bound by that amount.
 
 Caliper handling
 ----------------
@@ -51,6 +66,9 @@ CEMENT = Fluid("cement", rho=1870.0, tau0=6.0, k=0.55, n=0.65)
 N_LAYER = 9
 N_AZIMUTH = 8
 
+#: Model only the open hole below this depth; see the module docstring.
+TOP_DEPTH = 175.0
+
 
 def load_caliper(path=None, synthetic=False, keep_tail=False, verbose=True):
     """Read (or synthesise) the caliper and trim any collapsed tail."""
@@ -72,14 +90,24 @@ def load_caliper(path=None, synthetic=False, keep_tail=False, verbose=True):
 
 
 def build(caliper, n_axial=250, excess=1.05, casing_od=CASING_OD,
-          casing_id=CASING_ID, flow_rate=FLOW_RATE):
-    length = float(caliper.depth[-1])
-    well = WellConfig(length, casing_id, casing_od, caliper)
+          casing_id=CASING_ID, flow_rate=FLOW_RATE, top_depth=TOP_DEPTH):
+    shoe = float(caliper.depth[-1])
+    length = shoe - top_depth
+    if length <= 0.0:
+        raise ValueError(
+            f"top_depth {top_depth} m is at or below the shoe at {shoe:.2f} m"
+        )
+    well = WellConfig(
+        length, casing_id, casing_od, caliper,
+        top_depth=top_depth,
+        rho_above_casing="auto",     # turns over as cement is pumped through
+        rho_above_annulus=MUD.rho,   # returns above the interval stay mud
+    )
     grid = GridConfig(n_axial=n_axial, n_layer=N_LAYER, n_azimuth=N_AZIMUTH)
 
     v_casing = math.pi * (0.5 * casing_id) ** 2 * length
     v_annulus = AnnulusGrid(length, casing_od, caliper, n_axial,
-                            N_LAYER, N_AZIMUTH).total_volume
+                            N_LAYER, N_AZIMUTH, z_offset=top_depth).total_volume
     schedule = PumpSchedule(
         [PumpStage(CEMENT, (v_casing + v_annulus) * excess, flow_rate)]
     )
@@ -87,7 +115,7 @@ def build(caliper, n_axial=250, excess=1.05, casing_od=CASING_OD,
         well, schedule, initial_fluid=MUD, grid=grid,
         numerics=NumericsConfig(diagnostics_every=40),
     )
-    return solver, schedule, length, v_casing, v_annulus
+    return solver, schedule, length, v_casing, v_annulus, shoe
 
 
 def parse_args(argv=None):
@@ -100,6 +128,8 @@ def parse_args(argv=None):
     p.add_argument("--casing-od-in", type=float, default=7.0)
     p.add_argument("--casing-id-in", type=float, default=6.184)
     p.add_argument("--rate-bpm", type=float, default=5.0)
+    p.add_argument("--top-depth", type=float, default=TOP_DEPTH,
+                   help="model only the open hole below this depth [m]")
     return p.parse_args(argv)
 
 
@@ -115,18 +145,21 @@ def main(argv=None) -> None:
     caliper, _ = load_caliper(args.caliper, args.synthetic, args.keep_tail)
     print(caliper.summary(casing_od=inch_to_m(args.casing_od_in)))
 
-    solver, schedule, length, v_casing, v_annulus = build(
+    top_depth = 0.0 if args.synthetic else args.top_depth
+    solver, schedule, length, v_casing, v_annulus, shoe = build(
         caliper, n_axial=args.n_axial,
         casing_od=inch_to_m(args.casing_od_in),
         casing_id=inch_to_m(args.casing_id_in),
         flow_rate=bpm_to_m3s(args.rate_bpm),
+        top_depth=top_depth,
     )
     ag = solver.annulus_grid
     gap = ag.r_outer - ag.r_inner
 
     smooth = math.pi * ((0.5 * caliper.gauge) ** 2
                         - (0.5 * inch_to_m(args.casing_od_in)) ** 2) * length
-    print(f"\nwell depth       : {length:.2f} m (from the log)")
+    print(f"\nmodelled interval: {top_depth:.2f} - {shoe:.2f} m "
+          f"({length:.2f} m of open hole)")
     print(f"gauge hole       : {m_to_inch(caliper.gauge):.2f} in "
           f"({caliper.gauge * 1e3:.1f} mm)")
     print(f"casing           : {args.casing_od_in:.3f} in OD / "
@@ -175,8 +208,37 @@ def main(argv=None) -> None:
     wide = hole > 1.3 * caliper.gauge
     if wide.any():
         print(f"\nwashed-out sections (> 1.3 x gauge): {100 * wide.mean():.0f} % of "
-              f"the well, local efficiency {local_eff[wide].mean():.4f} "
+              f"the interval")
+        print(f"  raw comparison   : {local_eff[wide].mean():.4f} in washouts "
               f"vs {local_eff[~wide].mean():.4f} elsewhere")
+        # The raw comparison confounds geometry with depth: annular flow is
+        # upward, so shallow cells are simply reached last and read low at the
+        # end of the job whatever their diameter.  Compare within depth bands.
+        edges = np.linspace(z.min(), z.max(), 6)
+        rows = []
+        for lo, hi in zip(edges[:-1], edges[1:]):
+            band = (z >= lo) & (z < hi)
+            bw, bg = band & wide, band & ~wide
+            if not (bw.any() and bg.any()):
+                continue
+            w_eff = float(np.average(local_eff[bw], weights=vol[bw]))
+            g_eff = float(np.average(local_eff[bg], weights=vol[bg]))
+            rows.append((lo, hi, w_eff, g_eff, float(vol[band].sum())))
+        if rows:
+            print("  within depth bands (a paired comparison - the only one that")
+            print("  separates geometry from arrival order):")
+            for lo, hi, w_eff, g_eff, _ in rows:
+                mark = "washout better" if w_eff > g_eff else "gauge better"
+                print(f"    {lo:6.0f}-{hi:6.0f} m   washout {w_eff:.4f}   "
+                      f"gauge {g_eff:.4f}   ({w_eff - g_eff:+.4f}, {mark})")
+            # Average the *differences*, not the levels: averaging levels
+            # re-imports the depth trend, because washout volume and gauge
+            # volume are not spread the same way over the bands.
+            diffs = np.array([w - g for _, _, w, g, _ in rows])
+            weights = np.array([v for *_, v in rows])
+            print(f"  mean difference  : {np.average(diffs, weights=weights):+.4f} "
+                  f"(volume-weighted over bands; "
+                  f"{(diffs > 0).sum()}/{len(diffs)} bands favour the washout)")
 
     # --- figures -----------------------------------------------------------
     from inpipe.wellview import animate_circulation, plot_well_section
@@ -191,9 +253,9 @@ def main(argv=None) -> None:
                           colorbar=(ax is axes[-1]))
         if ax is not axes[0]:
             ax.set_ylabel("")
-    fig.suptitle(f"K-GEP-1: cement displacing mud, {length:.0f} m of "
-                 f"{args.casing_od_in:.0f} in casing in a "
-                 f"{m_to_inch(caliper.gauge):.1f} in hole")
+    fig.suptitle(f"K-GEP-1: cement displacing mud, open hole "
+                 f"{top_depth:.0f}-{shoe:.0f} m, {args.casing_od_in:.0f} in casing "
+                 f"in a {m_to_inch(caliper.gauge):.1f} in hole")
     fig.tight_layout()
     fig.savefig(OUT / "field_circulation_sections.png", dpi=140, bbox_inches="tight")
     print(f"\nwrote {OUT / 'field_circulation_sections.png'}")
@@ -202,14 +264,14 @@ def main(argv=None) -> None:
     axes[0].plot(m_to_inch(hole), z, lw=0.6)
     axes[0].axvline(m_to_inch(caliper.gauge), color="0.5", ls="--", lw=0.9, label="gauge")
     axes[0].axvline(args.casing_od_in, color="C3", ls=":", lw=1.0, label="casing OD")
-    axes[0].set_ylim(length, 0)
+    axes[0].set_ylim(shoe, top_depth)
     axes[0].set_xlabel("hole diameter [in]")
     axes[0].set_ylabel("depth [m]")
     axes[0].legend(fontsize=8)
     axes[0].grid(alpha=0.3)
 
     axes[1].plot(local_eff, z, lw=0.8)
-    axes[1].set_ylim(length, 0)
+    axes[1].set_ylim(shoe, top_depth)
     axes[1].set_xlim(-0.03, 1.03)
     axes[1].set_xlabel("local cement fraction")
     axes[1].grid(alpha=0.3)
