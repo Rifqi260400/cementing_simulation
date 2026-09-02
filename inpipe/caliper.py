@@ -46,7 +46,7 @@ import numpy as np
 
 from .config import ft_to_m, inch_to_m
 
-__all__ = ["CaliperLog", "read_caliper", "synthetic_caliper"]
+__all__ = ["CaliperLog", "read_caliper", "synthetic_caliper", "implausible_tail"]
 
 _DEPTH_ALIASES = {"dept", "depth", "md", "measured_depth", "depth_m", "depth_ft", "tvd"}
 _DIAMETER_ALIASES = {
@@ -246,18 +246,33 @@ def read_caliper(
     depth_unit=None,
     diameter_unit=None,
     null_value=-999.25,
+    depth_min=None,
+    depth_max=None,
+    min_diameter=None,
 ) -> CaliperLog:
     """Read a caliper log from CSV or LAS.
 
     Columns are found by name unless ``depth_column`` / ``diameter_column`` are
     given (name or zero-based index).  Units are inferred unless stated; see the
-    module docstring.  Rows whose diameter equals ``null_value`` (the LAS
-    convention) or is non-finite are dropped.
+    module docstring.  Rows whose diameter equals ``null_value`` or is
+    non-finite are dropped; a LAS file's own ``NULL`` declaration overrides the
+    argument.
+
+    ``depth_min`` / ``depth_max`` trim the log to a depth window [m], and
+    ``min_diameter`` drops samples narrower than a threshold [m].  Both are for
+    cutting the junk a real log carries - a collapsed caliper arm at total
+    depth, say.  Nothing is trimmed automatically: use
+    :func:`implausible_tail` to find where a log goes bad, then say so
+    explicitly, so the cut is a recorded decision rather than a silent one.
     """
     path = Path(path)
-    text = path.read_text()
+    # Real logs carry stray bytes in curve descriptions (degree signs, and so
+    # on).  Those never matter to the numbers, so do not let them stop the read.
+    text = path.read_text(encoding="utf-8", errors="replace")
     if path.suffix.lower() == ".las" or text.lstrip().startswith("~"):
-        headers, rows = _parse_las(text)
+        headers, rows, declared_null = _parse_las(text)
+        if declared_null is not None:
+            null_value = declared_null
     else:
         headers, rows = _parse_csv(text)
 
@@ -300,6 +315,14 @@ def read_caliper(
 
     depth = np.array(depth)
     diameter = np.array(diameter)
+    if depth_min is not None:
+        keep = depth >= depth_min
+        depth, diameter = depth[keep], diameter[keep]
+    if depth_max is not None:
+        keep = depth <= depth_max
+        depth, diameter = depth[keep], diameter[keep]
+    if depth.size < 2:
+        raise ValueError(f"{path}: fewer than two samples left after trimming")
     depth, diameter, units = _convert_units(
         depth, diameter, depth_unit, diameter_unit, source=f"{path.name}: "
     )
@@ -311,6 +334,14 @@ def read_caliper(
         np.add.at(summed, inverse, diameter)
         np.add.at(counts, inverse, 1.0)
         depth, diameter = uniq, summed / counts
+    if min_diameter is not None:
+        keep = diameter >= min_diameter
+        if keep.sum() < 2:
+            raise ValueError(
+                f"{path}: fewer than two samples at or above min_diameter="
+                f"{min_diameter:.4g} m"
+            )
+        depth, diameter = depth[keep], diameter[keep]
     return CaliperLog(depth, diameter, name=path.name, units=units)
 
 
@@ -335,8 +366,18 @@ def _parse_csv(text):
 
 
 def _parse_las(text):
-    """Minimal LAS 2.0 reader: ~C for curve names, ~A for the data block."""
-    headers, data, section = [], [], None
+    """LAS 2.0 reader covering both WRAP modes.
+
+    ``~V`` gives the wrap flag, ``~W`` the NULL value, ``~C`` the curve
+    mnemonics and units, ``~A`` the data.  In wrapped files one depth step
+    spans several lines, so the data section is tokenised as a flat stream and
+    reshaped by the curve count - which also handles the unwrapped case.
+
+    Returns ``(headers, rows, null_value)``; ``null_value`` is ``None`` when the
+    file does not declare one.
+    """
+    headers, tokens, section = [], [], None
+    null_value = None
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -344,17 +385,51 @@ def _parse_las(text):
         if line.startswith("~"):
             section = line[1].upper()
             continue
-        if section == "C":
+        if section == "W" and line.upper().startswith("NULL"):
+            for token in line.split(":")[0].split():
+                try:
+                    null_value = float(token)
+                    break
+                except ValueError:
+                    continue
+        elif section == "C":
             mnemonic, _, rest = line.partition(".")
-            unit = rest.split()[0].strip() if rest.split() else ""
-            headers.append(
-                f"{mnemonic.strip()}_{unit}" if unit else mnemonic.strip()
-            )
+            parts = rest.split()
+            unit = parts[0].split(":")[0].strip() if parts else ""
+            headers.append(f"{mnemonic.strip()}_{unit}" if unit else mnemonic.strip())
         elif section == "A":
-            data.append(line.split())
+            tokens.extend(line.split())
+
     if not headers:
         raise ValueError("LAS file has no ~C curve section")
-    return headers, data
+    n = len(headers)
+    complete = (len(tokens) // n) * n
+    if complete == 0:
+        raise ValueError("LAS file has no complete data records")
+    rows = [tokens[i:i + n] for i in range(0, complete, n)]
+    return headers, rows, null_value
+
+
+def implausible_tail(log: "CaliperLog", fraction: float = 0.6):
+    """Find a contiguous run of implausibly narrow hole at the bottom of a log.
+
+    A caliper often collapses at total depth - the arms close on fill, or the
+    tool bottoms out - leaving a block of readings far below gauge that is
+    instrument behaviour, not geometry.
+
+    Returns ``(start_depth, end_depth, n_samples)`` for the trailing run below
+    ``fraction`` x gauge, or ``None`` if the log ends in gauge.  The caller
+    decides whether to cut; this only reports.
+    """
+    threshold = fraction * log.gauge
+    below = log.diameter < threshold
+    if not below[-1]:
+        return None
+    # Walk back while the readings stay below threshold.
+    i = len(below) - 1
+    while i > 0 and below[i - 1]:
+        i -= 1
+    return float(log.depth[i]), float(log.depth[-1]), int(len(below) - i)
 
 
 # ---------------------------------------------------------------------------

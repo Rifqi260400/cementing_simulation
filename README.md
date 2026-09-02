@@ -42,14 +42,42 @@ therefore **structurally inactive** and are deliberately not implemented.
 ## Full circulation: cement down the casing, up the annulus
 
 ```bash
-.venv/bin/python -m cases.circulation_200m                  # synthetic caliper
-.venv/bin/python -m cases.circulation_200m path/to/cal.csv  # your own log
+.venv/bin/python -m cases.circulation                     # bundled K-GEP-1 log
+.venv/bin/python -m cases.circulation --caliper my.las    # your own log
+.venv/bin/python -m cases.circulation --synthetic         # no log needed
 ```
 
-200 m of 5 in casing (5½ in OD) in an open hole whose diameter comes from a
-caliper log. The well starts full of mud; cement is pumped from surface with no
-spacer, turns at the shoe, and displaces mud up the annulus. Produces
-`results/circulation.mp4`, the section snapshots and the pressure history.
+Runs on the real caliper log in `data/K-GEP-1_composite.las` — a 390 m
+composite log with the borehole-diameter curve in inches. The well depth, the
+gauge hole size and the annular geometry all come from it: **386.75 m** of
+**7 in casing** (6.184 in ID, 29 lb/ft — the standard string for the log's
+10.43 in gauge hole) in an open hole that ranges 8.15–24.0 in. The well starts
+full of mud; cement is pumped from surface with no spacer, turns at the shoe,
+and displaces mud up the annulus. Produces `results/field_circulation.mp4`, the
+section snapshots and the pressure history.
+
+The log is **wrapped** (`WRAP. YES`), declares `NULL = -99999`, and carries
+non-UTF8 bytes in a curve description — all handled. Its units come from the
+`~C` section (depth in m, diameter in inches), not from magnitudes.
+
+**The collapsed tail is cut, and the cut is reported.** The caliper drops from
+13.3 in at 386.75 m to 2.1 in below it and stays there for 3.2 m: the tool
+bottoming out, not geometry. `implausible_tail` finds it; the case cuts it and
+says so. Nothing is trimmed silently — `--keep-tail` leaves it in.
+
+### Results on this well
+
+| | |
+|---|---|
+| annular displacement efficiency | **87.4 %** |
+| annulus volume | 15.15 m³, **+29 %** over an in-gauge hole |
+| ECD at shoe | 1242 → 1847 kg/m³ over the job |
+| U-tube imbalance | peaks at **18.6 bar (270 psi)**; free-fall for **92 %** of the job |
+| conservation | sum-to-one 1.3e-13, volume 7.9e-16 |
+
+Washed-out sections (> 1.3 × gauge, 7 % of the well) reach **94.9 %** local
+efficiency against **84.7 %** elsewhere — the profile-flattening effect
+described below, now on real geometry.
 
 The annulus is solved by the **parallel-plate (slot) approximation**, which is
 what the source paper says its own annulus model uses (Appendix A.1:
@@ -287,9 +315,9 @@ you want the CFD run, not this.
 
 ### Figures produced
 
-| `results/circulation.mp4` | the job as an animation - cement down, round the shoe, up the annulus |
-| `results/circulation_sections.png` | well sections at four times |
-| `results/circulation_history.png` | efficiency, ECD and the U-tube imbalance against time |
+| `results/field_circulation.mp4` | the K-GEP-1 job as an animation - cement down, round the shoe, up the annulus |
+| `results/field_circulation_sections.png` | well sections at four times, on the real caliper |
+| `results/field_circulation_history.png` | hole size, local efficiency, efficiency and pressure against time |
 
 All of it can be written out for external comparison:
 
