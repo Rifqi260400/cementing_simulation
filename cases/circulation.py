@@ -322,7 +322,7 @@ def main(argv=None) -> None:
     for ax, i in zip(axes, picks):
         snap = result.snapshots[i]
         plot_well_section(result, i_cem, ax=ax, casing_f=snap["casing"],
-                          annulus_f=snap["annulus"],
+                          annulus_f=snap["annulus"], rathole_f=snap["rathole"],
                           title=f"t = {snap['time'] / 60:.1f} min",
                           colorbar=(ax is axes[-1]))
         if ax is not axes[0]:

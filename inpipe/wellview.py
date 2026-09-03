@@ -41,7 +41,10 @@ def well_section_image(result, fluid_index, casing_f=None, annulus_f=None, n_x=4
     ``(x_min, x_max, z_max, z_min)`` for ``imshow`` with depth increasing down.
 
     ``casing_f``, ``annulus_f`` and ``rathole_f`` default to the final state;
-    pass a snapshot's arrays to render an earlier instant.
+    pass a snapshot's arrays to render an earlier instant.  Passing a snapshot
+    for the legs but not for the rat hole is refused rather than filled in from
+    the final state: it renders silently, and what it renders is a rat hole
+    already cemented from the first frame.
 
     The rat hole is drawn below the shoe at the full hole width, since there is
     no casing in it.  Leaving it out was misleading rather than merely
@@ -51,6 +54,13 @@ def well_section_image(result, fluid_index, casing_f=None, annulus_f=None, n_x=4
     cg, ag = result.casing_grid, result.annulus_grid
     cf = result.casing_fractions if casing_f is None else casing_f
     af = result.annulus_fractions if annulus_f is None else annulus_f
+    if (rathole_f is None and result.rathole_volume > 0.0
+            and (casing_f is not None or annulus_f is not None)):
+        raise ValueError(
+            "rendering a snapshot needs its rat hole composition too - pass "
+            "rathole_f=snap['rathole']; falling back to the final state would "
+            "draw the rat hole cemented at every instant"
+        )
     rf = result.rathole_fractions if rathole_f is None else rathole_f
 
     r_ci = cg.radius

@@ -150,7 +150,7 @@ def test_the_section_image_draws_the_rat_hole(ratted_job):
 
     _, result, _ = ratted_job
     img, extent = well_section_image(result, len(result.fluids) - 1)
-    z_min, z_max = extent[3], extent[2]
+    z_max = extent[2]
     assert z_max == pytest.approx(result.rathole_bottom, abs=0.5)
     assert result.rathole_bottom > result.rathole_top
 
@@ -183,3 +183,24 @@ def test_snapshots_carry_the_rat_hole_for_the_animation(ratted_job):
     last = result.snapshots[-1]["rathole"]
     assert first[0] == pytest.approx(1.0)        # starts full of mud
     assert last[-1] > first[-1]                  # and takes cement as it runs
+
+
+def test_rendering_a_snapshot_without_its_rat_hole_is_refused(ratted_job):
+    """Silently reusing the final composition draws a lie, so it must not.
+
+    The section figure and the animation both render snapshots.  A caller that
+    passes the legs but forgets the rat hole would get the *end* of the job
+    down there in every frame - a rat hole already full of cement before the
+    cement has even reached the shoe.  That is exactly what happened to the
+    four-panel figure once, and it renders without complaint.
+    """
+    from inpipe.wellview import well_section_image
+
+    _, result, _ = ratted_job
+    snap = {"casing": result.casing_fractions, "annulus": result.annulus_fractions}
+    with pytest.raises(ValueError, match="rat hole"):
+        well_section_image(result, len(result.fluids) - 1,
+                           snap["casing"], snap["annulus"])
+    # With it, fine.
+    well_section_image(result, len(result.fluids) - 1, snap["casing"],
+                       snap["annulus"], rathole_f=result.rathole_fractions)
