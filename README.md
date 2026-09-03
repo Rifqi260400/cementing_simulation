@@ -113,34 +113,54 @@ ready to overlay on a CFD line probe.
 
 ### Where the two agree, and where they do not
 
-| | this model | Tao et al. CFD |
-|---|---|---|
-| irregular vs smooth wall | 0.8905 vs 0.8717 — **irregular better** | "efficiency … higher in Case-2 (irregular)" — **agrees** |
-| best inlet velocity | 0.05 m/s (0.913) > 0.2 (0.888) > 0.5 (0.872) | 0.5 m/s optimal, 0.2 > 0.05 — **opposite** |
+Displacement efficiency, all twelve runs (100 x 13 x 8, 1.05 x annulus volume):
 
-The agreement on wall roughness is independent corroboration of the
-profile-flattening mechanism, from a completely different method.
+| geometry | yield-stress law | 0.5 m/s | 0.2 m/s | 0.05 m/s |
+|---|---|---|---|---|
+| smooth | exact HB (rigid plug) | 0.8717 | 0.8884 | **0.9133** |
+| smooth | Fluent regularisation | **0.8424** | 0.8194 | 0.8087 |
+| wavy | exact HB (rigid plug) | 0.8905 | 0.9072 | **0.9304** |
+| wavy | Fluent regularisation | **0.8440** | 0.8247 | 0.8186 |
 
-The disagreement on velocity is the informative one. This model is monotonic —
-slower flow means a larger plug and a flatter profile, so better displacement.
-The CFD finds the reverse, and the likely reason is buoyancy: the densimetric
-Froude number `Fr = ū/√(At·g·h)` is **0.36, 0.14 and 0.036** at the three inlet
-velocities, i.e. *below one everywhere and falling*. At `Fr ≪ 1` the density
-contrast governs rather than the imposed flow, and slower means more time for it
-to act. **This model has no buoyancy mechanism at all** (assumption A-29), so it
-cannot reproduce that trend and should not be trusted on rate optimisation.
+**Irregular beats smooth in both treatments** — the same direction Tao et al.
+report ("efficiency … higher in Case-2"). Independent corroboration of the
+profile-flattening mechanism, from a completely different method. The *margin*
+is treatment-dependent though: +0.019 under the exact law, only +0.002 to
++0.010 under the regularisation, because with no plug there is less profile to
+flatten.
+
+**The velocity trend reverses with the yield-stress treatment, and this is the
+result worth taking away.** Under the exact law the model is monotonic the
+wrong way: slower flow means a larger plug (40 % → 50 % → 63 % of the gap) and
+a flatter profile, so better displacement. Under Fluent's regularisation there
+is no plug to grow, the profile only sharpens as the flow slows
+(`u_max/ū` 1.373 → 1.469 → 1.494), and the ranking becomes
+**0.5 > 0.2 > 0.05 — which is Tao et al.'s ranking.**
+
+An earlier version of this README attributed that disagreement to buoyancy. On
+this evidence that was premature: the discrepancy was the constitutive
+treatment, and it goes away when this model integrates the yield stress the way
+the CFD's solver does. Three points is not a validation, and buoyancy may still
+matter — the densimetric Froude number `Fr = ū/√(At·g·h)` is **0.36, 0.14 and
+0.036**, below one everywhere and falling, and this model has no buoyancy
+mechanism at all (assumption A-29). But the yield-stress treatment now accounts
+for the sign, so buoyancy is no longer needed to explain it.
+
+The practical consequence for comparing against Fluent: **compare against the
+regularised branch.** That is the law Fluent solves.
 
 ### Yield stress now follows Fluent
 
 `regularisation_shear_rate` switches the constitutive law from the exact
 Herschel–Bulkley (rigid plug, the in-pipe paper's form) to Fluent's regularised
 one: viscosity capped below `γ̇_c` and **no plug anywhere**. On the Tao et al.
-annulus that is a first-order change, not a detail —
+annulus at 0.5 m/s that is a first-order change, not a detail —
 
 | | exact HB | Fluent regularisation |
 |---|---|---|
-| plug | **44 % of the gap** | none |
-| `u_max/ū` | 1.14 | **1.36** |
+| plug | **40 % of the gap** | none |
+| `u_max/ū` | 1.175 | **1.373** |
+| efficiency | 0.8717 | 0.8424 |
 
 — and it acts precisely in the slow region where fluid is left behind. Two
 findings about the published equations, both of which change numbers:

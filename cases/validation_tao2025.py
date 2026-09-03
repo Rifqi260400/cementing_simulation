@@ -202,7 +202,11 @@ def main(argv=None) -> None:
 
         s, f = radial_profile(result, cement, args.probe_depth)
         axes[0].plot(s, f, marker="o", ms=3, label=f"$u_{{in}}$ = {u_in} m/s")
-        tag = "exact" if args.exact else "fluent"
+        # Both the geometry and the yield-stress law go in the name: without
+        # the geometry a --irregular run silently overwrites the smooth one's
+        # exports, and the two are not comparable.
+        tag = f"{'wavy' if args.irregular else 'smooth'}_" \
+              f"{'exact' if args.exact else 'fluent'}"
         path = OUT / f"tao2025_radial_u{u_in:g}_{tag}.csv"
         path.write_text(
             "s_over_gap,cement_fraction\n"
@@ -243,7 +247,10 @@ def main(argv=None) -> None:
     treatment = "exact HB (plug)" if args.exact else "Fluent regularisation (no plug)"
     fig.suptitle(f"{spec.name} - {label} - {treatment}")
     fig.tight_layout()
-    out_png = OUT / f"tao2025_validation_{'exact' if args.exact else 'fluent'}.png"
+    out_png = OUT / (
+        f"tao2025_validation_{'wavy' if args.irregular else 'smooth'}_"
+        f"{'exact' if args.exact else 'fluent'}.png"
+    )
     fig.savefig(out_png, dpi=140, bbox_inches="tight")
     print(f"\nwrote {out_png}")
 
