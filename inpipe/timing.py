@@ -86,8 +86,12 @@ class ArrivalReport:
     #: real hole holds less than the reference and the interface runs ahead of
     #: it.  Give ``bit_diameter`` in the case file to make it a true bound.
     in_gauge: np.ndarray | None = None
-    #: Uniform delay from a rat hole that must fill before the annulus does
-    #: [s]; zero unless a rat hole volume was given.
+    #: Pumping time of the rat hole volume [s], reported only.  It is *not*
+    #: added to :attr:`arrival`: the solver holds the rat hole as a real
+    #: volume, so the delay it causes is already in the simulated front, and
+    #: adding it again would count it twice.  It is still added to the
+    #: volumetric curves, which are a plug-displacement hand calculation and
+    #: have no rat hole of their own.
     rat_hole_delay: float = 0.0
 
     def at(self, threshold: float) -> np.ndarray:
@@ -299,8 +303,10 @@ class ArrivalReport:
                 "before sweeping it"
             )
         if self.rat_hole_delay > 0.0:
-            lines.append(f"  rat hole delay    : {self.rat_hole_delay / 60:.2f} min, "
-                         "applied to every curve")
+            lines.append(
+                f"  rat hole          : {self.rat_hole_delay / 60:.2f} min to pump its "
+                "volume; already in the front, and added to the volumetric curves"
+            )
         if 0.1 in self.thresholds and 0.9 in self.thresholds:
             width = self.mixing_zone_duration()[got]
             if np.any(np.isfinite(width)):
@@ -418,16 +424,16 @@ class ArrivalTracker:
 
     def report(self, job_time: float) -> ArrivalReport:
         order = np.argsort(self.grid.z_centers)   # ascending depth
-        # A rat hole is a volume below the shoe that fills before the annulus
-        # starts to.  It is not in the mesh, so the simulated front does not
-        # wait for it; the wait is exactly the extra pumping time, and it
-        # applies uniformly to every depth.
+        # The rat hole is in the solver as a real volume, so the front already
+        # waits for it.  This is the plug-displacement pumping time of that
+        # volume, reported for comparison with the volumetric curves - which do
+        # carry it, being a hand calculation with no rat hole in them.
         delay = 0.0
         if self._rat_hole_volume > 0.0 and np.isfinite(self._t_offset_full):
             delay = float(self._t_offset_full - self._t_casing_full)
         return ArrivalReport(
             depth=self.grid.z_centers[order],
-            arrival=self._arrival[:, order] + delay,
+            arrival=self._arrival[:, order],
             thresholds=self.thresholds,
             job_time=float(job_time),
             fluid_name=self.fluid_name,

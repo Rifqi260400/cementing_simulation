@@ -61,8 +61,19 @@ models the whole logged interval instead.
 
 **7 in casing** (6.184 in ID, 29 lb/ft — the standard string for a 10.43 in
 gauge hole) in an open hole that ranges 8.15–24.0 in. The well starts full of
-mud; cement is pumped with no spacer, turns at the shoe, and displaces mud up
-the annulus.
+mud; cement is pumped with no spacer, leaves the casing at the shoe, fills the
+rat hole, and displaces mud up the annulus.
+
+**The casing does not land on bottom.** `geometry.rat_hole_length` (5 m by
+default — an assumption, replace it with the real shoe depth) puts the shoe
+above total depth, and the gap below it is the space the cement turns around
+in. It is carried as one **well-mixed volume** rather than meshed as a flow
+path: a rat hole is a dead end, fluid enters and leaves it at the same level,
+so a flow-path model would sweep it clean when a dead-end pocket is the
+opposite of that. Note the limitation runs the other way too — this rat hole
+turns over ~50 times during the job, so well-mixed leaves it 99.6 % cement,
+and a real one is partly stagnant and would hold more. Treat the residual
+there as a lower bound.
 
 **Both fluids' properties live in `cases/kgep1.json`**, not in the code — the
 mud and slurry numbers there are placeholders until the real ones are measured,

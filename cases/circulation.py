@@ -105,7 +105,7 @@ def load_caliper(path=None, synthetic=False, keep_tail=False, verbose=True):
 
 def build(caliper, n_axial=250, excess=None, casing_od=None,
           casing_id=None, flow_rate=None, top_depth=None,
-          cement_volume=None, spec=None):
+          cement_volume=None, spec=None, rat_hole_length=None):
     """Build the solver for one job.
 
     Every property defaults to the case file (``spec``, or ``cases/kgep1.json``);
@@ -117,17 +117,24 @@ def build(caliper, n_axial=250, excess=None, casing_od=None,
     flow_rate = spec.flow["flow_rate"] if flow_rate is None else flow_rate
     top_depth = spec.geometry["top_depth"] if top_depth is None else top_depth
     excess = spec.flow.get("excess", 1.05) if excess is None else excess
+    rat_hole = (spec.geometry.get("rat_hole_length", 0.0)
+                if rat_hole_length is None else rat_hole_length)
     mud, cement = spec.displaced, spec.displacing
 
-    shoe = float(caliper.depth[-1])
+    # The casing does not land on bottom: the rat hole is open hole below the
+    # shoe, and it is the space the cement turns around in on its way up.
+    total_depth = float(caliper.depth[-1])
+    shoe = total_depth - rat_hole
     length = shoe - top_depth
     if length <= 0.0:
         raise ValueError(
-            f"top_depth {top_depth} m is at or below the shoe at {shoe:.2f} m"
+            f"top_depth {top_depth} m is at or below the shoe at {shoe:.2f} m "
+            f"(total depth {total_depth:.2f} m less a {rat_hole:.2f} m rat hole)"
         )
     well = WellConfig(
         length, casing_id, casing_od, caliper,
         top_depth=top_depth,
+        rat_hole_length=rat_hole,
         rho_above_casing="auto",     # turns over as cement is pumped through
         rho_above_annulus=mud.rho,   # returns above the interval stay mud
     )
@@ -139,7 +146,9 @@ def build(caliper, n_axial=250, excess=None, casing_od=None,
     # ``cement_volume`` overrides the excess rule, so a job can be sized off a
     # different hole than the one it is pumped into - which is exactly the
     # mistake of designing on bit size and ignoring the caliper.
-    pumped = (v_casing + v_annulus) * excess if cement_volume is None else cement_volume
+    # The rat hole has to be filled too, so it belongs in the job volume.
+    pumped = ((v_casing + v_annulus + well.rat_hole_volume) * excess
+              if cement_volume is None else cement_volume)
     schedule = PumpSchedule([PumpStage(cement, pumped, flow_rate)])
     solver = CirculationSolver(
         well, schedule, initial_fluid=mud, grid=grid,
@@ -206,8 +215,13 @@ def main(argv=None) -> None:
 
     smooth = math.pi * ((0.5 * caliper.gauge) ** 2
                         - (0.5 * casing_od) ** 2) * length
+    well = solver.well
     print(f"\nmodelled interval: {top_depth:.2f} - {shoe:.2f} m "
           f"({length:.2f} m of open hole)")
+    if well.rat_hole_length > 0.0:
+        print(f"rat hole         : {shoe:.2f} - {well.total_depth:.2f} m "
+              f"({well.rat_hole_length:.2f} m, {well.rat_hole_volume:.3f} m^3) "
+              f"- open hole below the shoe, where the cement turns around")
     print(f"gauge hole       : {m_to_inch(caliper.gauge):.2f} in "
           f"({caliper.gauge * 1e3:.1f} mm)")
     print(f"casing           : {m_to_inch(casing_od):.3f} in OD / "
@@ -223,7 +237,6 @@ def main(argv=None) -> None:
 
     result = solver.run(t_end=schedule.total_time, n_snapshots=args.snapshots,
                         progress=False,
-                        rat_hole_volume=spec.geometry.get("rat_hole_volume", 0.0),
                         gauge_diameter=spec.geometry.get("bit_diameter"))
     i_cem = result.fluids.index(CEMENT)
     h = result.history
@@ -234,6 +247,11 @@ def main(argv=None) -> None:
     print(f"volume error     : {h['mass_error'].max():.2e}")
     print(f"annular displacement efficiency: "
           f"{result.annular_displacement_efficiency(i_cem):.4f}")
+
+    if result.rathole_volume > 0.0:
+        left = result.rathole_fractions[0] * result.rathole_volume
+        print(f"rat hole at end  : {100 * result.rathole_fractions[i_cem]:.2f} % cement, "
+              f"{left * 1e3:.2f} L of mud left below the shoe")
 
     print("\n--- rising time ---")
     print(result.arrival.summary())

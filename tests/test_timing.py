@@ -112,7 +112,10 @@ def test_volumetric_arrival_reproduces_the_hand_calculation(short_job):
     g = result.annulus_grid
     order = np.argsort(g.z_centers)
     below = np.cumsum(g.cell_volume.sum(axis=(1, 2))[order][::-1])[::-1]
-    expected = (v_casing + below) / schedule.stages[0].flow_rate
+    # Casing, then the rat hole below the shoe, then the annulus - the order
+    # Hart et al. (2025) write in their Eq. 2.
+    offset = v_casing + result.rathole_volume
+    expected = (offset + below) / schedule.stages[0].flow_rate
 
     got = result.arrival.volumetric
     assert np.all(np.isfinite(got))
@@ -252,12 +255,14 @@ def test_rise_velocity_recovers_rate_over_area(short_job):
     assert got[np.isfinite(got)] == pytest.approx(expected, rel=1e-9)
 
 
-def test_a_rat_hole_delays_every_curve_by_its_own_volume():
+def test_a_rat_hole_offsets_the_volumetric_curve_but_not_the_front():
     """Hart et al. had to assume a 10 m3 rat hole to make the times line up.
 
-    It is open hole below the shoe, so it fills before the annulus starts to
-    rise.  The mesh does not contain it, so the delay is applied uniformly -
-    and it must be the pumping time for that volume, not a fitted offset.
+    It fills before the annulus starts to rise, so their Eq. 2 puts its volume
+    in front of the annulus sum.  Here the solver holds the rat hole as a real
+    volume, so the *simulated* front already waits for it - the tracker must
+    not shift it as well, or the wait is counted twice.  Only the volumetric
+    curve, a hand calculation with no rat hole of its own, gets the offset.
     """
     stations = _Stations(2, volume=1.0)
     rate = 2.0                                   # m^3/s, so 5 m^3 takes 2.5 s
@@ -269,10 +274,18 @@ def test_a_rat_hole_delays_every_curve_by_its_own_volume():
             t = 0.5 * step
             cement = [1.0, 0.0] if t >= 1.0 else [0.0, 0.0]
             tracker.update(t, _fractions(cement), rate * t)
+
     delay = ratted.report(4.0).rat_hole_delay
     assert delay == pytest.approx(5.0 / rate)
-    shifted = ratted.report(4.0).at(0.5) - plain.report(4.0).at(0.5)
-    assert shifted[np.isfinite(shifted)] == pytest.approx(delay)
+
+    # The front is the same: these two trackers were fed identical fractions,
+    # and the rat hole is not theirs to simulate.
+    front_shift = ratted.report(4.0).at(0.5) - plain.report(4.0).at(0.5)
+    assert np.all(front_shift[np.isfinite(front_shift)] == 0.0)
+
+    # The volumetric curve is later by exactly the pumping time of the volume.
+    volumetric_shift = ratted.report(4.0).volumetric - plain.report(4.0).volumetric
+    assert volumetric_shift == pytest.approx(delay)
 
 
 def test_the_front_envelope_is_monotonic_where_the_front_is_not(short_job):

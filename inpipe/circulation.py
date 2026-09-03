@@ -60,11 +60,15 @@ __all__ = ["WellConfig", "CirculationResult", "CirculationSolver"]
 class WellConfig:
     """Geometry of a cased vertical well with an open-hole annulus."""
 
-    length: float               # length of the modelled interval [m]
+    length: float               # length of the cased interval [m]
     casing_id: float            # casing inner diameter [m]
     casing_od: float            # casing outer diameter [m]
     caliper: CaliperLog         # hole diameter against depth
     inclination: float = 0.0    # from vertical [rad]; 0 is vertical
+    #: Open hole below the shoe [m] - the rat hole.  Cement leaves the casing
+    #: at the shoe, fills this, and only then turns up into the annulus, so it
+    #: sets where the annulus starts and delays every arrival above it.
+    rat_hole_length: float = 0.0
     #: Measured depth of the top of the modelled interval [m].  Zero models the
     #: whole well from surface; set it to model only a deeper section, in which
     #: case the column above is accounted for by ``head_above_*`` below.
@@ -86,11 +90,27 @@ class WellConfig:
             )
         if self.top_depth < 0.0:
             raise ValueError("top_depth must be non-negative")
+        if self.rat_hole_length < 0.0:
+            raise ValueError("rat_hole_length must be non-negative")
 
     @property
     def shoe_depth(self) -> float:
-        """True measured depth of the shoe [m]."""
+        """True measured depth of the casing shoe [m]."""
         return self.top_depth + self.length
+
+    @property
+    def total_depth(self) -> float:
+        """Bottom of the hole [m]: the shoe plus the rat hole below it."""
+        return self.shoe_depth + self.rat_hole_length
+
+    @property
+    def rat_hole_volume(self) -> float:
+        """Open-hole volume below the shoe [m^3], full bore (no casing in it)."""
+        if self.rat_hole_length <= 0.0:
+            return 0.0
+        z = np.linspace(self.shoe_depth, self.total_depth, 201)
+        area = 0.25 * math.pi * self.caliper.diameter_at(z) ** 2
+        return float(np.trapezoid(area, z))
 
     @property
     def casing_radius(self) -> float:
@@ -118,6 +138,11 @@ class CirculationResult:
     annulus_tau_w: np.ndarray | None = None
     #: When the displacing fluid first reached each depth; see :mod:`inpipe.timing`.
     arrival: object | None = None
+    #: Final composition of the rat hole, and its volume [m^3].  A dead end
+    #: below the shoe purges exponentially, so what is left there at the end of
+    #: the job is a result in its own right - it is cement that never got in.
+    rathole_fractions: np.ndarray | None = None
+    rathole_volume: float = 0.0
 
     def yield_diagnostic(self, fluid) -> dict:
         """Where the annular wall shear falls below ``fluid``'s yield stress.
@@ -214,6 +239,17 @@ class CirculationSolver:
         self.f_casing[0] = 1.0
         self.f_annulus = np.zeros((self.n_fluids,) + self.annulus_grid.shape)
         self.f_annulus[0] = 1.0
+
+        #: Composition of the rat hole - the open hole below the shoe.  It is a
+        #: dead end: fluid enters and leaves it at the same level, so it is
+        #: held as one well-mixed volume rather than meshed as a flow path.
+        #: Modelling it as a section the flow passes through would have it swept
+        #: clean, and a dead-end pocket is the opposite of that; well-mixed
+        #: purges exponentially and never quite finishes, which is what a rat
+        #: hole does (assumption A-48).
+        self.rat_hole_volume = float(well.rat_hole_volume)
+        self.f_rathole = np.zeros(self.n_fluids)
+        self.f_rathole[0] = 1.0
 
         self.t = 0.0
         self.n_steps = 0
@@ -337,6 +373,11 @@ class CirculationSolver:
             cfl_timestep(u_c, self.casing_grid.dz, num.cfl),
             cfl_timestep(u_a, self.annulus_grid.dz, num.cfl),
         )
+        if self.rat_hole_volume > 0.0 and q > 0.0:
+            # Do not turn the rat hole over more than the CFL fraction in one
+            # step: the mixing update is explicit, and a step that replaces more
+            # than its own volume overshoots.
+            dt_limit = min(dt_limit, num.cfl * self.rat_hole_volume / q)
         if not np.isfinite(dt_limit):
             dt_limit = np.inf
         dt = dt_limit if dt is None else min(dt, dt_limit)
@@ -353,6 +394,15 @@ class CirculationSolver:
         # the explicit Euler the rest of the step uses.
         shoe = self._shoe_mixing_cup(u_c)
 
+        # The rat hole sits between the two: what leaves the casing enters it,
+        # and what enters the annulus leaves it.  Taken before the update, like
+        # everything else in this explicit step.
+        annulus_inlet = shoe
+        if self.rat_hole_volume > 0.0:
+            annulus_inlet = self.f_rathole.copy()
+            turnover = q * dt / self.rat_hole_volume
+            self.f_rathole += turnover * (shoe - self.f_rathole)
+
         cg, ag = self.casing_grid, self.annulus_grid
         self.f_casing = advect_multi(
             self.f_casing, u_c, cg.dz, dt,
@@ -364,7 +414,7 @@ class CirculationSolver:
         uf_a = ag.normalise_face_flux(face_velocity_stack(u_a), q)
         self.f_annulus = advect_multi(
             self.f_annulus, u_a, ag.dz, dt,
-            face_scheme=num.face_scheme, inlet_values=shoe,
+            face_scheme=num.face_scheme, inlet_values=annulus_inlet,
             closure=num.transverse_closure, area=ag.cell_area,
             u_faces=uf_a,
             face_area=ag.face_area, cell_volume=ag.cell_volume,
@@ -506,14 +556,15 @@ class CirculationSolver:
         """
         vc = float((self.f_casing.sum(axis=0) * self.casing_grid.cell_volume).sum())
         va = float((self.f_annulus.sum(axis=0) * self.annulus_grid.cell_volume).sum())
-        exact = self.casing_grid.total_volume + self.annulus_grid.total_volume
-        return abs(vc + va - exact) / exact
+        vr = float(self.f_rathole.sum()) * self.rat_hole_volume
+        exact = (self.casing_grid.total_volume + self.annulus_grid.total_volume
+                 + self.rat_hole_volume)
+        return abs(vc + va + vr - exact) / exact
 
     # -- run ----------------------------------------------------------------
 
     def run(self, t_end=None, n_snapshots=0, progress=False,
-            track_arrival=True, rat_hole_volume=0.0,
-            gauge_diameter=None) -> CirculationResult:
+            track_arrival=True, gauge_diameter=None) -> CirculationResult:
         num = self.numerics
         if t_end is None:
             t_end = self.schedule.total_time
@@ -523,7 +574,7 @@ class CirculationSolver:
         tracker = (ArrivalTracker(self.annulus_grid, self.n_fluids - 1,
                                   fluid_name=self.fluids[-1].name,
                                   casing_volume=self.casing_grid.total_volume,
-                                  rat_hole_volume=rat_hole_volume,
+                                  rat_hole_volume=self.rat_hole_volume,
                                   gauge_diameter=(self.well.caliper.gauge
                                                   if gauge_diameter is None
                                                   else gauge_diameter))
@@ -544,6 +595,9 @@ class CirculationSolver:
                 tracker.update(self.t, self.f_annulus, self.pumped_displacing)
             check_sum_to_one(self.f_casing, atol=num.sum_to_one_atol)
             check_sum_to_one(self.f_annulus, atol=num.sum_to_one_atol)
+            if self.rat_hole_volume > 0.0:
+                check_sum_to_one(self.f_rathole[:, None, None, None],
+                                 atol=num.sum_to_one_atol)
             check_bounded(self.f_casing, atol=num.boundedness_atol)
             check_bounded(self.f_annulus, atol=num.boundedness_atol)
             take = bool(snap_times) and self.t >= snap_times[0]
@@ -572,4 +626,6 @@ class CirculationSolver:
             hydraulics=self.hydraulics(),
             annulus_tau_w=np.array([p.tau_w for p in self._last["profiles"]]),
             arrival=None if tracker is None else tracker.report(self.t),
+            rathole_fractions=self.f_rathole.copy(),
+            rathole_volume=self.rat_hole_volume,
         )

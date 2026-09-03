@@ -34,7 +34,7 @@ __all__ = ["CaseSpec", "load_case", "save_case", "DEFAULT_CASE"]
 
 _FLUID_KEYS = {"name", "rho", "tau0", "k", "n"}
 _GEOMETRY_KEYS = {"length", "casing_id", "casing_od", "hole_diameter", "top_depth",
-                  "rat_hole_volume", "bit_diameter"}
+                  "rat_hole_length", "bit_diameter"}
 _FLOW_KEYS = {"inlet_velocity", "flow_rate", "excess"}
 _INTERFACE_KEYS = {"surface_tension"}
 _RHEOLOGY_KEYS = {"regularisation_shear_rate", "normalise_consistency"}
