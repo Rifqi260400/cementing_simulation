@@ -118,8 +118,9 @@ Fluids and geometry follow Tao, Wang, Ahmadi & Massoudi (2025), *Materials* 18,
 3098 — cement slurry `ρ = 1200`, Herschel–Bulkley `τ_y = 1.4 Pa`, `k = 0.6`,
 `n = 0.4`; drilling fluid `ρ = 998`, Newtonian `μ = 1 cP`; 1 m of 16 cm ID /
 20 cm OD casing in a 40 cm hole. Exports
-`results/tao2025_radial_u*.csv` — cement fraction across the annular gap,
-ready to overlay on a CFD line probe.
+`results/tao2025_radial_u<velocity>_<geometry>_<law>.csv` — cement fraction
+across the annular gap, ready to overlay on a CFD line probe. The geometry and
+the yield-stress law are both in the name, so runs cannot overwrite each other.
 
 ### Where the two agree, and where they do not
 
