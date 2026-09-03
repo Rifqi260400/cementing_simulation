@@ -40,6 +40,7 @@ from .caliper import CaliperLog
 from .config import G_ACCEL, GridConfig, NumericsConfig
 from .fluid import Fluid, PumpSchedule, mix_fluids
 from .grid import Grid
+from .timing import ArrivalTracker
 from .hydraulics import HydraulicsReport, circulation_pressure
 from .slot import SlotProfile, solve_slot_tau_w
 from .transport import (
@@ -115,6 +116,8 @@ class CirculationResult:
     hydraulics: HydraulicsReport | None = None
     #: Wall shear stress per annular station [Pa], in annulus flow order.
     annulus_tau_w: np.ndarray | None = None
+    #: When the displacing fluid first reached each depth; see :mod:`inpipe.timing`.
+    arrival: object | None = None
 
     def yield_diagnostic(self, fluid) -> dict:
         """Where the annular wall shear falls below ``fluid``'s yield stress.
@@ -214,6 +217,8 @@ class CirculationSolver:
 
         self.t = 0.0
         self.n_steps = 0
+        #: Volume of the displacing fluid pumped in at the inlet so far [m^3].
+        self.pumped_displacing = 0.0
         self._casing_cache: dict = {}
         self._slot_cache: dict = {}
         self._history = {k: [] for k in (
@@ -367,6 +372,10 @@ class CirculationSolver:
 
         self.t += dt
         self.n_steps += 1
+        # Cumulative volume of the displacing fluid pumped in at the inlet.
+        # Taken from the schedule rather than from rate x time so it stays right
+        # if the rate changes or another fluid is pumped for part of the job.
+        self.pumped_displacing += q * float(casing_inlet[-1]) * dt
         self._last = dict(q=q, u_c=u_c, u_a=u_a, profiles=profiles, shoe=shoe, dt=dt)
         return dt
 
@@ -502,20 +511,32 @@ class CirculationSolver:
 
     # -- run ----------------------------------------------------------------
 
-    def run(self, t_end=None, n_snapshots=0, progress=False) -> CirculationResult:
+    def run(self, t_end=None, n_snapshots=0, progress=False,
+            track_arrival=True) -> CirculationResult:
         num = self.numerics
         if t_end is None:
             t_end = self.schedule.total_time
+        # Recorded every step rather than on snapshots: it is one reduction over
+        # the annulus, far below the cost of a step, and snapshot spacing would
+        # quantise the arrival time to ~10 s on a field-scale job.
+        tracker = (ArrivalTracker(self.annulus_grid, self.n_fluids - 1,
+                                  fluid_name=self.fluids[-1].name,
+                                  casing_volume=self.casing_grid.total_volume)
+                   if track_arrival else None)
         snap_times = (
             list(np.linspace(0.0, t_end, n_snapshots)) if n_snapshots > 0 else []
         )
         wall0 = time.perf_counter()
         self.record(snapshot=bool(snap_times))
+        if tracker is not None:
+            tracker.update(self.t, self.f_annulus, self.pumped_displacing)
         if snap_times:
             snap_times.pop(0)
 
         while self.t < t_end:
             self.step(min(np.inf, t_end - self.t))
+            if tracker is not None:
+                tracker.update(self.t, self.f_annulus, self.pumped_displacing)
             check_sum_to_one(self.f_casing, atol=num.sum_to_one_atol)
             check_sum_to_one(self.f_annulus, atol=num.sum_to_one_atol)
             check_bounded(self.f_casing, atol=num.boundedness_atol)
@@ -545,4 +566,5 @@ class CirculationSolver:
             snapshots=self._snapshots,
             hydraulics=self.hydraulics(),
             annulus_tau_w=np.array([p.tau_w for p in self._last["profiles"]]),
+            arrival=None if tracker is None else tracker.report(self.t),
         )

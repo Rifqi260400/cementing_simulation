@@ -88,6 +88,44 @@ non-UTF8 bytes in a curve description — all handled. Its units come from the
 bottoming out, not geometry. `implausible_tail` finds it; the case cuts it and
 says so. Nothing is trimmed silently — `--keep-tail` leaves it in.
 
+### Rising time
+
+```bash
+.venv/bin/python -m cases.circulation      # writes results/field_arrival_time.{csv,png}
+```
+
+Cement arrival against measured depth — the same axes as a fiber optic
+waterfall, so a DTS/DAS log can be laid straight over it. Two curves, because
+they answer different questions and differ by ~10 %:
+
+| | K-GEP-1, 175 → 386.33 m |
+|---|---|
+| cement reaches the shoe | 4.19 min |
+| cement reaches 175 m (front) | 17.28 min |
+| **rising time, shoe → top** | **13.09 min** over 210.9 m (0.269 m/s) |
+| volumetric (pump rate + caliper) | 17.99 min to the top |
+| front runs ahead of the volume balance by | **9.2 %** |
+| mixing zone (0.1 → 0.9 contour) | 409 s median |
+
+The **volumetric** curve is the hand calculation: pumped volume against casing
+volume plus annulus volume below each depth. It needs no simulator — but it
+does need the caliper, and on this well the annulus holds 59 % more than an
+in-gauge hole, so a rising time computed from bit size is badly early.
+
+The **front** is the 0.5 contour of the local cement fraction — what a fiber
+log sees pass. It leads the volume balance by 9–10 % because roughly half the
+annular area travels faster than the mean. That lead does not shrink under mesh
+refinement (−10.2 % at 60 axial stations, −11.7 % at 240), so it is the
+velocity profile and not numerical diffusion. **That 9–10 % is what this model
+adds over the hand calculation.**
+
+> **Read it as an upper bound on time.** The flow rate is imposed — it is the
+> volume entering the inlet per unit time — and the U-tube imbalance is
+> reported but not fed back (assumption A-45). On this well that imbalance
+> reaches 21.8 bar for 99 % of the job, and a free-falling well returns faster
+> than the pump imposes. If a fiber optic log shows cement arriving *early*,
+> suspect this before suspecting the rheology.
+
 ### Results on this well
 
 | | 175–386.75 m (default) | whole logged interval |

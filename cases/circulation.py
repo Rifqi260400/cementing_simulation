@@ -233,6 +233,12 @@ def main(argv=None) -> None:
     print(f"annular displacement efficiency: "
           f"{result.annular_displacement_efficiency(i_cem):.4f}")
 
+    print("\n--- rising time ---")
+    print(result.arrival.summary())
+    arrival_csv = OUT / "field_arrival_time.csv"
+    result.arrival.to_csv(arrival_csv)
+    print(f"    wrote {arrival_csv}")
+
     print("\n--- hydraulics at end of job ---")
     print(result.hydraulics.summary())
     ff = h["pump_pressure"] < 0.0
@@ -339,6 +345,37 @@ def main(argv=None) -> None:
     fig.tight_layout()
     fig.savefig(OUT / "field_circulation_history.png", dpi=140)
     print(f"wrote {OUT / 'field_circulation_history.png'}")
+
+    # --- arrival time against depth: the fiber optic comparison ------------
+    rep = result.arrival
+    fig, ax = plt.subplots(figsize=(6.2, 7.0))
+    ax.plot(rep.volumetric / 60.0, rep.depth, color="0.55", ls="--", lw=1.4,
+            label="volumetric (pump rate + caliper)")
+    ax.plot(rep.at(0.5) / 60.0, rep.depth, color="C0", lw=1.8,
+            label="front (cement fraction 0.5)")
+    # Only where both contours exist.  Above the depth the 0.9 contour never
+    # reaches, an unmasked fill draws a flat band to the edge of the axes and
+    # reads as "the mixing zone lasts to the end of the job", when what it
+    # actually means is that those depths finish holding more than 10 % mud.
+    band = np.isfinite(rep.at(0.1)) & np.isfinite(rep.at(0.9))
+    ax.fill_betweenx(rep.depth, rep.at(0.1) / 60.0, rep.at(0.9) / 60.0,
+                     where=band, color="C0", alpha=0.18, lw=0,
+                     label="mixing zone (0.1 - 0.9)")
+    if not np.all(band):
+        shallowest = rep.depth[band].min() if np.any(band) else rep.depth.max()
+        ax.axhline(shallowest, color="C3", ls=":", lw=1.0)
+        ax.text(ax.get_xlim()[0], shallowest, "  above here the job ends with "
+                "> 10 % mud", color="C3", fontsize=7.5, va="bottom")
+    ax.invert_yaxis()
+    ax.set_xlabel("time since start of pumping [min]")
+    ax.set_ylabel("measured depth [m]")
+    ax.set_title("Cement arrival against depth\n"
+                 "imposed pump rate - an upper bound on time", fontsize=10)
+    ax.legend(fontsize=8, loc="lower left")
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(OUT / "field_arrival_time.png", dpi=140)
+    print(f"wrote {OUT / 'field_arrival_time.png'}")
 
     path = animate_circulation(result, OUT / "field_circulation.mp4",
                                fluid_index=i_cem, fps=14)
