@@ -46,6 +46,7 @@ therefore **structurally inactive** and are deliberately not implemented.
 .venv/bin/python -m cases.circulation --top-depth 0       # whole logged interval
 .venv/bin/python -m cases.circulation --caliper my.las    # your own log
 .venv/bin/python -m cases.circulation --synthetic         # no log needed
+.venv/bin/python -m cases.circulation --case my.json      # your own fluids
 ```
 
 Runs on the real caliper log in `data/K-GEP-1_composite.las` — a 390 m
@@ -62,6 +63,15 @@ models the whole logged interval instead.
 gauge hole) in an open hole that ranges 8.15–24.0 in. The well starts full of
 mud; cement is pumped with no spacer, turns at the shoe, and displaces mud up
 the annulus.
+
+**Both fluids' properties live in `cases/kgep1.json`**, not in the code — the
+mud and slurry numbers there are placeholders until the real ones are measured,
+so change them and rerun. The same file carries the casing sizes, the pump
+rate, the excess and the modelled interval, and can switch this case to the
+Fluent yield-stress treatment as well (`rheology.regularisation_shear_rate`).
+A command-line flag still overrides the file when one is given. To make the
+drilling fluid water, as in the CFD case, set `tau0` to 0, `k` to `1e-3` and
+`n` to 1.
 
 The column above the modelled interval is still accounted for hydrostatically,
 so shoe pressure and ECD stay true-depth quantities: the annulus above is taken

@@ -1,11 +1,15 @@
 """Case files - editable fluid properties, geometry and rheology."""
 
 import json
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from inpipe.caseio import DEFAULT_CASE, CaseSpec, load_case, save_case
 from inpipe.fluid import Fluid
+
+CASE_PATH = Path(__file__).resolve().parent.parent / "cases" / "kgep1.json"
 
 MINIMAL = {
     "fluids": {
@@ -124,3 +128,38 @@ def test_interface_dimensionless_groups():
 
     assert InterfaceConfig().capillary_number(1.0, 1.0) == float("inf")
     assert InterfaceConfig().bond_number(1.0, 1.0) == float("inf")
+
+
+def test_the_field_case_reads_its_fluids_from_the_case_file(tmp_path):
+    """Editing ``cases/kgep1.json`` must change what the well case simulates.
+
+    The point of the case file is that the mud and slurry properties are not
+    yet known, so they will be changed repeatedly.  If the case script kept its
+    own constants, an edit would appear to work - the file parses, the summary
+    prints the new numbers - and the simulation would quietly run the old ones.
+    """
+    from cases.circulation import CASE, build
+    from inpipe.caliper import synthetic_caliper
+    from inpipe.caseio import load_case, save_case
+    from inpipe.config import inch_to_m
+
+    edited = tmp_path / "edited.json"
+    spec = load_case(CASE_PATH)
+    save_case(
+        replace(
+            spec,
+            displaced=Fluid("brine", 1010.0, 0.0, 1.1e-3, 1.0),
+            displacing=Fluid("slurry", 1950.0, 9.0, 0.8, 0.55),
+        ),
+        edited,
+    )
+
+    caliper = synthetic_caliper(200.0, inch_to_m(8.5))
+    solver, schedule, *_ = build(caliper, n_axial=12, top_depth=0.0,
+                                 spec=load_case(edited))
+
+    assert solver.fluids[0].name == "brine"
+    assert solver.fluids[0].rho == 1010.0
+    assert schedule.stages[0].fluid.tau0 == 9.0
+    # And the default case is untouched by the edit.
+    assert CASE.displaced.name == "mud"

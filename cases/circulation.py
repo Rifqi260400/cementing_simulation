@@ -46,9 +46,17 @@ import numpy as np
 
 from inpipe.annulus_grid import AnnulusGrid
 from inpipe.caliper import implausible_tail, read_caliper, synthetic_caliper
+from inpipe.caseio import load_case
 from inpipe.circulation import CirculationSolver, WellConfig
-from inpipe.config import GridConfig, NumericsConfig, bpm_to_m3s, inch_to_m, m_to_inch
-from inpipe.fluid import Fluid, PumpSchedule, PumpStage
+from inpipe.config import (
+    GridConfig,
+    NumericsConfig,
+    bpm_to_m3s,
+    inch_to_m,
+    m3s_to_bpm,
+    m_to_inch,
+)
+from inpipe.fluid import PumpSchedule, PumpStage
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "results"
@@ -56,18 +64,24 @@ DEFAULT_LOG = ROOT / "data" / "K-GEP-1_composite.las"
 
 #: 7 in, 29 lb/ft casing - the standard string for a 10-5/8 in hole, which is
 #: what this log's 10.43 in gauge is.  Nominal annular clearance 1.71 in.
-CASING_OD = inch_to_m(7.0)
-CASING_ID = inch_to_m(6.184)
+#: Fluid properties, casing geometry, rate and the modelled interval all come
+#: from a case file, so they can be changed without editing code - the mud and
+#: slurry properties are placeholders until the real ones are available.  See
+#: :mod:`inpipe.caseio`; ``--case`` selects a different file.
+DEFAULT_CASE = ROOT / "cases" / "kgep1.json"
+CASE = load_case(DEFAULT_CASE)
 
-FLOW_RATE = bpm_to_m3s(5.0)
-MUD = Fluid("mud", rho=1198.0, tau0=2.0, k=0.30, n=0.72)
-CEMENT = Fluid("cement", rho=1870.0, tau0=6.0, k=0.55, n=0.65)
+CASING_OD = CASE.geometry["casing_od"]
+CASING_ID = CASE.geometry["casing_id"]
+FLOW_RATE = CASE.flow["flow_rate"]
+MUD = CASE.displaced
+CEMENT = CASE.displacing
 
 N_LAYER = 9
 N_AZIMUTH = 8
 
 #: Model only the open hole below this depth; see the module docstring.
-TOP_DEPTH = 175.0
+TOP_DEPTH = CASE.geometry["top_depth"]
 
 
 def load_caliper(path=None, synthetic=False, keep_tail=False, verbose=True):
@@ -89,9 +103,22 @@ def load_caliper(path=None, synthetic=False, keep_tail=False, verbose=True):
     return trimmed, tail
 
 
-def build(caliper, n_axial=250, excess=1.05, casing_od=CASING_OD,
-          casing_id=CASING_ID, flow_rate=FLOW_RATE, top_depth=TOP_DEPTH,
-          cement_volume=None):
+def build(caliper, n_axial=250, excess=None, casing_od=None,
+          casing_id=None, flow_rate=None, top_depth=None,
+          cement_volume=None, spec=None):
+    """Build the solver for one job.
+
+    Every property defaults to the case file (``spec``, or ``cases/kgep1.json``);
+    an explicit argument overrides it.
+    """
+    spec = CASE if spec is None else spec
+    casing_od = spec.geometry["casing_od"] if casing_od is None else casing_od
+    casing_id = spec.geometry["casing_id"] if casing_id is None else casing_id
+    flow_rate = spec.flow["flow_rate"] if flow_rate is None else flow_rate
+    top_depth = spec.geometry["top_depth"] if top_depth is None else top_depth
+    excess = spec.flow.get("excess", 1.05) if excess is None else excess
+    mud, cement = spec.displaced, spec.displacing
+
     shoe = float(caliper.depth[-1])
     length = shoe - top_depth
     if length <= 0.0:
@@ -102,7 +129,7 @@ def build(caliper, n_axial=250, excess=1.05, casing_od=CASING_OD,
         length, casing_id, casing_od, caliper,
         top_depth=top_depth,
         rho_above_casing="auto",     # turns over as cement is pumped through
-        rho_above_annulus=MUD.rho,   # returns above the interval stay mud
+        rho_above_annulus=mud.rho,   # returns above the interval stay mud
     )
     grid = GridConfig(n_axial=n_axial, n_layer=N_LAYER, n_azimuth=N_AZIMUTH)
 
@@ -113,10 +140,14 @@ def build(caliper, n_axial=250, excess=1.05, casing_od=CASING_OD,
     # different hole than the one it is pumped into - which is exactly the
     # mistake of designing on bit size and ignoring the caliper.
     pumped = (v_casing + v_annulus) * excess if cement_volume is None else cement_volume
-    schedule = PumpSchedule([PumpStage(CEMENT, pumped, flow_rate)])
+    schedule = PumpSchedule([PumpStage(cement, pumped, flow_rate)])
     solver = CirculationSolver(
-        well, schedule, initial_fluid=MUD, grid=grid,
-        numerics=NumericsConfig(diagnostics_every=40),
+        well, schedule, initial_fluid=mud, grid=grid,
+        numerics=NumericsConfig(
+            diagnostics_every=40,
+            regularisation_shear_rate=spec.regularisation_shear_rate,
+            normalise_consistency=spec.normalise_consistency,
+        ),
     )
     return solver, schedule, length, v_casing, v_annulus, shoe
 
@@ -128,10 +159,15 @@ def parse_args(argv=None):
     p.add_argument("--keep-tail", action="store_true", help="do not cut the collapsed tail")
     p.add_argument("--n-axial", type=int, default=250)
     p.add_argument("--snapshots", type=int, default=110)
-    p.add_argument("--casing-od-in", type=float, default=7.0)
-    p.add_argument("--casing-id-in", type=float, default=6.184)
-    p.add_argument("--rate-bpm", type=float, default=5.0)
-    p.add_argument("--top-depth", type=float, default=TOP_DEPTH,
+    p.add_argument("--case", type=Path, default=DEFAULT_CASE,
+                   help="JSON case file with fluid properties, casing geometry "
+                        "and rate (default cases/kgep1.json)")
+    # These default to the case file rather than to a number, so editing the
+    # case file is enough and a flag still wins when one is given.
+    p.add_argument("--casing-od-in", type=float, default=None)
+    p.add_argument("--casing-id-in", type=float, default=None)
+    p.add_argument("--rate-bpm", type=float, default=None)
+    p.add_argument("--top-depth", type=float, default=None,
                    help="model only the open hole below this depth [m]")
     return p.parse_args(argv)
 
@@ -145,36 +181,45 @@ def main(argv=None) -> None:
     args = parse_args(argv)
     OUT.mkdir(exist_ok=True)
 
-    caliper, _ = load_caliper(args.caliper, args.synthetic, args.keep_tail)
-    print(caliper.summary(casing_od=inch_to_m(args.casing_od_in)))
+    spec = CASE if args.case == DEFAULT_CASE else load_case(args.case)
+    casing_od = (spec.geometry["casing_od"] if args.casing_od_in is None
+                 else inch_to_m(args.casing_od_in))
+    casing_id = (spec.geometry["casing_id"] if args.casing_id_in is None
+                 else inch_to_m(args.casing_id_in))
+    flow_rate = (spec.flow["flow_rate"] if args.rate_bpm is None
+                 else bpm_to_m3s(args.rate_bpm))
 
-    top_depth = 0.0 if args.synthetic else args.top_depth
+    print(spec.summary())
+    print()
+    caliper, _ = load_caliper(args.caliper, args.synthetic, args.keep_tail)
+    print(caliper.summary(casing_od=casing_od))
+
+    top_depth = 0.0 if args.synthetic else (
+        spec.geometry["top_depth"] if args.top_depth is None else args.top_depth)
     solver, schedule, length, v_casing, v_annulus, shoe = build(
-        caliper, n_axial=args.n_axial,
-        casing_od=inch_to_m(args.casing_od_in),
-        casing_id=inch_to_m(args.casing_id_in),
-        flow_rate=bpm_to_m3s(args.rate_bpm),
+        caliper, n_axial=args.n_axial, spec=spec,
+        casing_od=casing_od, casing_id=casing_id, flow_rate=flow_rate,
         top_depth=top_depth,
     )
     ag = solver.annulus_grid
     gap = ag.r_outer - ag.r_inner
 
     smooth = math.pi * ((0.5 * caliper.gauge) ** 2
-                        - (0.5 * inch_to_m(args.casing_od_in)) ** 2) * length
+                        - (0.5 * casing_od) ** 2) * length
     print(f"\nmodelled interval: {top_depth:.2f} - {shoe:.2f} m "
           f"({length:.2f} m of open hole)")
     print(f"gauge hole       : {m_to_inch(caliper.gauge):.2f} in "
           f"({caliper.gauge * 1e3:.1f} mm)")
-    print(f"casing           : {args.casing_od_in:.3f} in OD / "
-          f"{args.casing_id_in:.3f} in ID")
+    print(f"casing           : {m_to_inch(casing_od):.3f} in OD / "
+          f"{m_to_inch(casing_id):.3f} in ID")
     print(f"annular gap      : {gap.min() * 1e3:.1f} - {gap.max() * 1e3:.1f} mm "
-          f"(gauge {(caliper.gauge - inch_to_m(args.casing_od_in)) / 2 * 1e3:.1f} mm)")
+          f"(gauge {(caliper.gauge - casing_od) / 2 * 1e3:.1f} mm)")
     print(f"casing volume    : {v_casing:.3f} m^3")
     print(f"annulus volume   : {v_annulus:.3f} m^3 "
           f"({100 * (v_annulus / smooth - 1):+.1f} % vs an in-gauge hole)")
     print(f"cement pumped    : {schedule.total_volume:.3f} m^3")
     print(f"job duration     : {schedule.total_time / 60:.1f} min at "
-          f"{args.rate_bpm:.1f} bpm")
+          f"{m3s_to_bpm(flow_rate):.1f} bpm")
 
     result = solver.run(t_end=schedule.total_time, n_snapshots=args.snapshots,
                         progress=False)
@@ -257,7 +302,7 @@ def main(argv=None) -> None:
         if ax is not axes[0]:
             ax.set_ylabel("")
     fig.suptitle(f"K-GEP-1: cement displacing mud, open hole "
-                 f"{top_depth:.0f}-{shoe:.0f} m, {args.casing_od_in:.0f} in casing "
+                 f"{top_depth:.0f}-{shoe:.0f} m, {m_to_inch(casing_od):.0f} in casing "
                  f"in a {m_to_inch(caliper.gauge):.1f} in hole")
     fig.tight_layout()
     fig.savefig(OUT / "field_circulation_sections.png", dpi=140, bbox_inches="tight")
@@ -266,7 +311,7 @@ def main(argv=None) -> None:
     fig, axes = plt.subplots(1, 4, figsize=(17, 4.4))
     axes[0].plot(m_to_inch(hole), z, lw=0.6)
     axes[0].axvline(m_to_inch(caliper.gauge), color="0.5", ls="--", lw=0.9, label="gauge")
-    axes[0].axvline(args.casing_od_in, color="C3", ls=":", lw=1.0, label="casing OD")
+    axes[0].axvline(m_to_inch(casing_od), color="C3", ls=":", lw=1.0, label="casing OD")
     axes[0].set_ylim(shoe, top_depth)
     axes[0].set_xlabel("hole diameter [in]")
     axes[0].set_ylabel("depth [m]")

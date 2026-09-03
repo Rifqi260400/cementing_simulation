@@ -27,9 +27,10 @@ from pathlib import Path
 import numpy as np
 
 from inpipe.caliper import CaliperLog
+from inpipe.caseio import load_case
 from inpipe.mudleft import mud_left_behind
 from inpipe.config import m_to_inch
-from cases.circulation import MUD, build, load_caliper
+from cases.circulation import CASE, DEFAULT_CASE, build, load_caliper
 
 OUT = Path(__file__).resolve().parent.parent / "results"
 
@@ -51,16 +52,19 @@ def parse_args(argv=None):
     p.add_argument("--n-axial", type=int, default=200)
     p.add_argument("--snapshots", type=int, default=90)
     p.add_argument("--washout-threshold", type=float, default=1.3)
+    p.add_argument("--case", type=Path, default=DEFAULT_CASE,
+                   help="JSON case file with fluid properties (default cases/kgep1.json)")
     return p.parse_args(argv)
 
 
 def run_one(caliper, args, label, cement_volume=None):
+    spec = CASE if getattr(args, "case", DEFAULT_CASE) == DEFAULT_CASE else load_case(args.case)
     solver, schedule, length, v_casing, v_annulus, shoe = build(
         caliper, n_axial=args.n_axial, excess=args.excess,
-        cement_volume=cement_volume,
+        cement_volume=cement_volume, spec=spec,
     )
     result = solver.run(t_end=schedule.total_time, n_snapshots=args.snapshots)
-    report = mud_left_behind(result, MUD, gauge=caliper.gauge,
+    report = mud_left_behind(result, spec.displaced, gauge=caliper.gauge,
                              washout_threshold=args.washout_threshold)
     print(f"\n--- {label} ---")
     print(f"annulus {v_annulus:.4f} m^3, cement pumped {schedule.total_volume:.3f} m^3 "
@@ -124,7 +128,9 @@ def main(argv=None) -> None:
     # --- figures -----------------------------------------------------------
     from inpipe.wellview import animate_circulation, plot_well_section
 
-    i_mud = real.fluids.index(MUD)
+    # The solver's fluid registry starts with the initial in-situ fluid,
+    # which is the displaced one whatever the case file calls it.
+    i_mud = 0
     z = rep.depth
 
     fig, axes = plt.subplots(1, 4, figsize=(16, 6.4), sharey=True)

@@ -1,0 +1,19 @@
+{
+  "name": "K-GEP-1 cementing job",
+  "notes": "Fluid properties for the field case. These are placeholders until the real mud and slurry data are available - change any number here and rerun; nothing in the code needs editing. The drilling fluid is currently a light water-based mud; set tau0 to 0 and k to 1e-3 with n = 1 to make it water.",
+  "fluids": {
+    "displaced":  {"name": "mud",    "rho": 1198.0, "tau0": 2.0, "k": 0.30, "n": 0.72},
+    "displacing": {"name": "cement", "rho": 1870.0, "tau0": 6.0, "k": 0.55, "n": 0.65}
+  },
+  "geometry": {
+    "casing_id": 0.1570736,
+    "casing_od": 0.1778,
+    "top_depth": 175.0
+  },
+  "flow": {
+    "flow_rate": 0.013248941244,
+    "excess": 1.05
+  },
+  "interface": {"surface_tension": 0.0},
+  "rheology": {"regularisation_shear_rate": null, "normalise_consistency": false}
+}
