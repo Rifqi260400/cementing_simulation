@@ -512,7 +512,8 @@ class CirculationSolver:
     # -- run ----------------------------------------------------------------
 
     def run(self, t_end=None, n_snapshots=0, progress=False,
-            track_arrival=True) -> CirculationResult:
+            track_arrival=True, rat_hole_volume=0.0,
+            gauge_diameter=None) -> CirculationResult:
         num = self.numerics
         if t_end is None:
             t_end = self.schedule.total_time
@@ -521,7 +522,11 @@ class CirculationSolver:
         # quantise the arrival time to ~10 s on a field-scale job.
         tracker = (ArrivalTracker(self.annulus_grid, self.n_fluids - 1,
                                   fluid_name=self.fluids[-1].name,
-                                  casing_volume=self.casing_grid.total_volume)
+                                  casing_volume=self.casing_grid.total_volume,
+                                  rat_hole_volume=rat_hole_volume,
+                                  gauge_diameter=(self.well.caliper.gauge
+                                                  if gauge_diameter is None
+                                                  else gauge_diameter))
                    if track_arrival else None)
         snap_times = (
             list(np.linspace(0.0, t_end, n_snapshots)) if n_snapshots > 0 else []

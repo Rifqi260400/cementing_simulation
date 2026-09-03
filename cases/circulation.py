@@ -222,7 +222,9 @@ def main(argv=None) -> None:
           f"{m3s_to_bpm(flow_rate):.1f} bpm")
 
     result = solver.run(t_end=schedule.total_time, n_snapshots=args.snapshots,
-                        progress=False)
+                        progress=False,
+                        rat_hole_volume=spec.geometry.get("rat_hole_volume", 0.0),
+                        gauge_diameter=spec.geometry.get("bit_diameter"))
     i_cem = result.fluids.index(CEMENT)
     h = result.history
 
@@ -347,8 +349,11 @@ def main(argv=None) -> None:
     print(f"wrote {OUT / 'field_circulation_history.png'}")
 
     # --- arrival time against depth: the fiber optic comparison ------------
+    # Laid out like Fig. 2 of Hart et al. (2025), Sci Rep 15:11365 - interface
+    # depth against time on the left, rise velocity against depth on the right -
+    # so a DAS waterfall can be overlaid on the left panel directly.
     rep = result.arrival
-    fig, ax = plt.subplots(figsize=(6.2, 7.0))
+    fig, (ax, axv) = plt.subplots(1, 2, figsize=(11.0, 7.0), sharey=True)
     ax.plot(rep.volumetric / 60.0, rep.depth, color="0.55", ls="--", lw=1.4,
             label="volumetric (pump rate + caliper)")
     ax.plot(rep.at(0.5) / 60.0, rep.depth, color="C0", lw=1.8,
@@ -366,6 +371,9 @@ def main(argv=None) -> None:
         ax.axhline(shallowest, color="C3", ls=":", lw=1.0)
         ax.text(ax.get_xlim()[0], shallowest, "  above here the job ends with "
                 "> 10 % mud", color="C3", fontsize=7.5, va="bottom")
+    if rep.in_gauge is not None:
+        ax.plot(rep.in_gauge / 60.0, rep.depth, color="C1", ls="-.", lw=1.2,
+                label="in-gauge \"fast rise\" (no washouts filled)")
     ax.invert_yaxis()
     ax.set_xlabel("time since start of pumping [min]")
     ax.set_ylabel("measured depth [m]")
@@ -373,6 +381,22 @@ def main(argv=None) -> None:
                  "imposed pump rate - an upper bound on time", fontsize=10)
     ax.legend(fontsize=8, loc="lower left")
     ax.grid(alpha=0.3)
+
+    axv.plot(rep.rise_velocity(rep.volumetric), rep.depth, color="0.55", ls="--",
+             lw=1.4, label="volumetric")
+    axv.plot(rep.rise_velocity(rep.front_envelope), rep.depth, color="C0", lw=1.6,
+             label="front (leading edge)")
+    if rep.in_gauge is not None:
+        axv.plot(rep.rise_velocity(rep.in_gauge), rep.depth, color="C1", ls="-.",
+                 lw=1.2, label="in-gauge")
+    # Log scale: this hole runs 8.15 - 24.0 in against 7 in casing, so the
+    # annular area spans a factor of 30 and the velocity two decades.  On a
+    # linear axis the tight sections flatten everything else against the wall.
+    axv.set_xscale("log")
+    axv.set_xlabel("rise velocity [m/min]")
+    axv.set_title("Rise velocity\ndips are washouts, spikes are tight hole", fontsize=10)
+    axv.legend(fontsize=8, loc="lower right")
+    axv.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(OUT / "field_arrival_time.png", dpi=140)
     print(f"wrote {OUT / 'field_arrival_time.png'}")

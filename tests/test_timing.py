@@ -174,9 +174,11 @@ def test_csv_carries_every_curve(short_job, tmp_path):
     report.to_csv(path)
     header = path.read_text().splitlines()[0].split(",")
     assert header == ["depth_m", "arrival_f0.1_s", "arrival_f0.5_s",
-                      "arrival_f0.9_s", "arrival_volumetric_s"]
+                      "arrival_f0.9_s", "arrival_volumetric_s",
+                      "arrival_in_gauge_s", "front_envelope_s",
+                      "front_rise_velocity_m_per_min"]
     body = np.loadtxt(path, delimiter=",", skiprows=1)
-    assert body.shape == (report.depth.size, 5)
+    assert body.shape == (report.depth.size, len(header))
 
 
 def test_tracking_can_be_switched_off(short_job):
@@ -187,3 +189,139 @@ def test_tracking_can_be_switched_off(short_job):
     solver, schedule, *_ = build(caliper, n_axial=12, top_depth=0.0)
     result = solver.run(t_end=0.5 * schedule.total_time, track_arrival=False)
     assert result.arrival is None
+
+
+# --- the Hart et al. (2025) comparison curves -------------------------------
+
+
+def test_in_gauge_arrival_is_faster_than_the_caliper_one(short_job):
+    """The "fast rise" bound of Hart et al. (2025).
+
+    An in-gauge hole holds less than a washed-out one, so the same pumped
+    volume carries the interface higher.  The two curves bracket the field
+    observation: their cement, being denser than the mud, filled the whole
+    caliper volume and tracked the slow curve, while their lighter freshwater
+    spacer took the path of least resistance and tracked the fast one.
+    """
+    report = short_job[0].arrival
+    assert report.in_gauge is not None
+    # Aggregate: an in-gauge hole holds less in total, so the top is reached
+    # sooner.  Station by station it is not a bound, because the caliper reads
+    # *under* gauge over part of the interval and the real hole holds less
+    # there - which is why a true bound needs the bit diameter, not the log's
+    # own median.
+    assert report.in_gauge[0] < report.volumetric[0]
+    assert np.mean(report.in_gauge < report.volumetric) > 0.5
+
+
+def test_rise_velocity_is_flat_in_gauge_and_dips_in_washouts(short_job):
+    """Their Fig. 2b: geometry read straight off the velocity curve.
+
+    On an in-gauge hole the rise velocity is Q/A, a constant.  The caliper
+    curve must be slower wherever the hole is wider, since the same rate has
+    more area to fill.
+    """
+    result = short_job[0]
+    report = result.arrival
+    flat = report.rise_velocity(report.in_gauge)
+    flat = flat[np.isfinite(flat)]
+    assert np.ptp(flat) / np.mean(flat) < 1e-9
+
+    # Wherever the hole is wider than gauge the interface must climb slower,
+    # and wherever it is narrower, faster.  Both directions, or the curve is
+    # not reading the geometry.
+    g = result.annulus_grid
+    order = np.argsort(g.z_centers)
+    wider = g.hole_diameter[order] > 1.05 * g.caliper.gauge
+    narrower = g.hole_diameter[order] < 0.95 * g.caliper.gauge
+    real = report.rise_velocity(report.volumetric)
+    inner = np.zeros(real.shape, dtype=bool)
+    inner[2:-2] = True                      # gradient is one-sided at the ends
+    assert np.all(real[wider & inner] < flat.mean())
+    assert np.all(real[narrower & inner] > flat.mean())
+
+
+def test_rise_velocity_recovers_rate_over_area(short_job):
+    """It must equal Q/A, or it is not the quantity the paper plots."""
+    result, schedule, _ = short_job
+    report = result.arrival
+    g = result.annulus_grid
+    gauge_area = 0.25 * np.pi * (g.caliper.gauge**2 - g.casing_od**2)
+    expected = 60.0 * schedule.stages[0].flow_rate / gauge_area
+    got = report.rise_velocity(report.in_gauge)
+    assert got[np.isfinite(got)] == pytest.approx(expected, rel=1e-9)
+
+
+def test_a_rat_hole_delays_every_curve_by_its_own_volume():
+    """Hart et al. had to assume a 10 m3 rat hole to make the times line up.
+
+    It is open hole below the shoe, so it fills before the annulus starts to
+    rise.  The mesh does not contain it, so the delay is applied uniformly -
+    and it must be the pumping time for that volume, not a fitted offset.
+    """
+    stations = _Stations(2, volume=1.0)
+    rate = 2.0                                   # m^3/s, so 5 m^3 takes 2.5 s
+    plain = ArrivalTracker(stations, 1, thresholds=(0.5,), casing_volume=1.0)
+    ratted = ArrivalTracker(stations, 1, thresholds=(0.5,), casing_volume=1.0,
+                            rat_hole_volume=5.0)
+    for tracker in (plain, ratted):
+        for step in range(9):
+            t = 0.5 * step
+            cement = [1.0, 0.0] if t >= 1.0 else [0.0, 0.0]
+            tracker.update(t, _fractions(cement), rate * t)
+    delay = ratted.report(4.0).rat_hole_delay
+    assert delay == pytest.approx(5.0 / rate)
+    shifted = ratted.report(4.0).at(0.5) - plain.report(4.0).at(0.5)
+    assert shifted[np.isfinite(shifted)] == pytest.approx(delay)
+
+
+def test_the_front_envelope_is_monotonic_where_the_front_is_not(short_job):
+    """Channelling makes the raw front non-monotonic; the envelope must not be.
+
+    Cement reaches a shallower station through the narrow side of a washout
+    before the wide station is half displaced, so the raw arrival curve doubles
+    back.  Differencing that gives negative rise velocities - on K-GEP-1 it ran
+    to -167 m/min.  The envelope is the leading edge, which is what an operator
+    traces on a DAS waterfall, and its velocity is non-negative by construction.
+    """
+    report = short_job[0].arrival
+    envelope = report.front_envelope
+    finite = np.isfinite(envelope)
+    assert np.all(np.diff(envelope[finite]) <= 1e-9)   # earlier as it gets deeper
+    speed = report.rise_velocity(envelope)
+    assert np.all(speed[np.isfinite(speed)] >= 0.0)
+    # The envelope never claims a later arrival than the front itself.
+    got = np.isfinite(report.front)
+    assert np.all(envelope[got] <= report.front[got] + 1e-9)
+
+
+def test_overtaking_is_counted_not_smoothed_away():
+    """The non-monotonicity is a finding, so it has to be reported as one."""
+    tracker = ArrivalTracker(_Stations(3), fluid_index=1, thresholds=(0.5,))
+    tracker.update(0.0, _fractions([0.0, 0.0, 0.0]))
+    tracker.update(1.0, _fractions([1.0, 0.0, 1.0]))   # skipped the middle
+    tracker.update(2.0, _fractions([1.0, 1.0, 1.0]))
+    report = tracker.report(2.0)
+    assert report.overtaking_depths == 1
+
+
+def test_rise_velocity_survives_depths_crossed_within_one_interval():
+    """Ties in the arrival curve must not divide by zero.
+
+    When the interface crosses several cells between two recordings they share
+    an arrival time.  Differencing straight across that is a zero denominator -
+    it produced NaNs and RuntimeWarnings on the real caliper, where the front
+    jumps through a narrow section.
+    """
+    tracker = ArrivalTracker(_Stations(6), fluid_index=1, thresholds=(0.5,))
+    tracker.update(0.0, _fractions(np.zeros(6)))
+    # Cells are in flow order, so cement fills from index 0 upward.  The three
+    # deepest cross together and share an arrival time.
+    tracker.update(1.0, _fractions([1, 1, 1, 0, 0, 0]))
+    tracker.update(2.0, _fractions([1, 1, 1, 1, 0, 0]))
+    tracker.update(3.0, _fractions(np.ones(6)))
+    report = tracker.report(3.0)
+    speed = report.rise_velocity(report.front_envelope)
+    finite = np.isfinite(speed)
+    assert finite.sum() >= 2
+    assert np.all(speed[finite] >= 0.0)

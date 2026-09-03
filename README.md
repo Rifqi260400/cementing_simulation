@@ -126,6 +126,54 @@ adds over the hand calculation.**
 > than the pump imposes. If a fiber optic log shows cement arriving *early*,
 > suspect this before suspecting the rheology.
 
+#### Matching a fiber optic log
+
+Hart et al. (2025), *Sci Rep* **15**:11365, track the rising interface behind a
+surface casing with DAS and compare it against an analytical displacement
+model. **Their Eqs. 2–4 are the volumetric curve above** — cumulative pumped
+volume against cumulative annular volume from the caliper, stinger and rat hole
+filled first, rise velocity `Q/A`. So this model reproduces theirs and puts the
+front on top of it. Three things carry over from their field data:
+
+- **Overlay the front on DAS, not DTS.** Their DTS cold front lagged *every*
+  modelled rise — the cable's thermal response is on a minute scale and heat
+  exchange with the formation blurs the step. The interface showed up in the
+  low-frequency DAS response.
+- **Which curve a fluid follows depends on its density.** Their light
+  freshwater spacer took the path of least resistance and tracked the in-gauge
+  "fast rise"; their cement, denser than the mud it displaced, filled the whole
+  annulus including washouts and tracked the caliper curve. Cement displacing
+  mud with no spacer — your case — should track the **caliper** curve, with the
+  front slightly ahead of it.
+- **Deviations are the diagnostic.** They read a rise *faster* than the caliper
+  curve as annular volume that never got filled (gelled mud in the washouts),
+  and *slower* as losses or fresh breakouts. This model predicts the first
+  directly, because it computes how much mud is left at each depth instead of
+  assuming perfect displacement.
+
+Three curves are exported for the overlay, plus rise velocity against depth
+(their Fig. 2b — every dip is a washout):
+
+| curve | what it is |
+|---|---|
+| in-gauge "fast rise" | 13.24 min to the top; washouts hold no cement at all |
+| **front** | **17.28 min**; 0.5 contour, what DAS sees pass |
+| volumetric (caliper) | 17.99 min; the hand calculation, their model |
+
+Set `geometry.rat_hole_volume` in `cases/kgep1.json` if the well has open hole
+below the shoe — it fills before the annulus rises, and delays every curve by
+its volume over the pump rate (they had to assume 10 m³ to make their times
+line up). Set `geometry.bit_diameter` to make the fast-rise curve a true bound;
+without it the curve uses the caliper's median, which the log reads under in
+places.
+
+The raw front is **not** monotonic in depth: cement channels through the narrow
+side of a washout and reaches a shallower station before the wide one is half
+displaced. On K-GEP-1 that happens at 1 of 250 depths. Differencing the raw
+curve gives rise velocities of −167 m/min, so the exported velocity uses the
+leading edge (running minimum) — the same curve an operator traces on a
+waterfall.
+
 ### Results on this well
 
 | | 175–386.75 m (default) | whole logged interval |
