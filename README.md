@@ -92,9 +92,17 @@ says so. Nothing is trimmed silently — `--keep-tail` leaves it in.
 ## CFD comparison — matched to Tao et al. (2025)
 
 ```bash
-.venv/bin/python -m cases.validation_tao2025            # all three inlet velocities
+.venv/bin/python -m cases.validation_tao2025              # all three inlet velocities
+.venv/bin/python -m cases.validation_tao2025 --exact      # exact HB instead (rigid plug)
 .venv/bin/python -m cases.validation_tao2025 --irregular  # Case-2 wavy wall
+.venv/bin/python -m cases.validation_tao2025 --case my.json
 ```
+
+**Everything editable lives in `cases/tao2025.json`** — both fluids' density and
+rheology, the geometry, the flow rate, the interfacial tension and the yield-stress
+treatment. Change a number there and rerun; no code needs touching. Unknown keys
+are *rejected*, so a mistyped property fails loudly rather than silently leaving
+a default in place.
 
 Fluids and geometry follow Tao, Wang, Ahmadi & Massoudi (2025), *Materials* 18,
 3098 — cement slurry `ρ = 1200`, Herschel–Bulkley `τ_y = 1.4 Pa`, `k = 0.6`,
@@ -122,24 +130,43 @@ contrast governs rather than the imposed flow, and slower means more time for it
 to act. **This model has no buoyancy mechanism at all** (assumption A-29), so it
 cannot reproduce that trend and should not be trusted on rate optimisation.
 
-### Three mismatches to fix before quoting agreement
+### Yield stress now follows Fluent
 
-1. **Yield-stress treatment.** Fluent regularises Herschel–Bulkley below
-   `γ̇_c = 5.5 s⁻¹`, capping the viscosity at `τ_y/γ̇_c + k γ̇_c^(n−1)` =
-   **0.470 Pa·s** and making the slurry a 470×-water *Newtonian* there. This
-   model uses the unregularised law with a true unyielded plug. The annulus in
-   this geometry runs at a nominal shear rate of **0.6–6.4 s⁻¹**, straddling the
-   cut-off, so much of it sits in the regularised regime — where this model puts
-   a plug filling **40–63 % of the gap**. Biggest single mismatch, and it lives
-   exactly in the slow region where mud is left.
-2. **Interfacial tension.** The CFD applies `σ = 0.07 N/m` between slurry and
-   drilling fluid, giving `Ca = μU/σ` of **0.07–0.72** — order one, so it shapes
-   the interface. That value is the *water–air* surface tension; two aqueous
-   wellbore fluids are closer to 0–1 mN/m and are substantially miscible. This
-   model is miscible with no interfacial tension at all.
-3. **The "drilling fluid" is water** — 998 kg/m³, 1 cP, Newtonian. It has no
-   yield stress, so it can never be stranded by failing to yield, and the
-   viscosity ratio (thick displacing thin) is unconditionally stable.
+`regularisation_shear_rate` switches the constitutive law from the exact
+Herschel–Bulkley (rigid plug, the in-pipe paper's form) to Fluent's regularised
+one: viscosity capped below `γ̇_c` and **no plug anywhere**. On the Tao et al.
+annulus that is a first-order change, not a detail —
+
+| | exact HB | Fluent regularisation |
+|---|---|---|
+| plug | **44 % of the gap** | none |
+| `u_max/ū` | 1.14 | **1.36** |
+
+— and it acts precisely in the slow region where fluid is left behind. Two
+findings about the published equations, both of which change numbers:
+
+- **Eqs. (15)–(16) have their inequalities the wrong way round.** As printed the
+  `τ_y/γ̇` branch is assigned to `γ̇ < γ̇_c`, where it *diverges*; the bi-viscosity
+  branch is assigned to `γ̇ > γ̇_c`, where it goes *negative* above `2γ̇_c`.
+- **Eq. (15) contradicts Eq. (14) and Table 1 by a factor of 2.8.** Normalising
+  the consistency by `γ̇_c`, as Eq. (15) prints it, implies an effective
+  `k = 1.669 Pa·sⁿ` rather than the 0.6 of Table 1. *Continuity does not settle
+  this — both readings join continuously at `γ̇_c`.* What settles it is that only
+  the literal form reproduces Eq. (14), and only it reduces to the exact law as
+  `γ̇_c → 0`. Literal is the default; `normalise_consistency` selects the other.
+
+### Two mismatches that remain
+
+1. **Interfacial tension is carried but not modelled.** `σ` is now an input and
+   its dimensionless groups are reported, but the transport is still miscible —
+   there is no momentum equation for a surface-tension term to enter, and
+   storing the number does not change that. It matters here: `Ca = μU/σ` is
+   **0.07–1.3**, order one, so interfacial tension is shaping the CFD's
+   interface. The value is also worth questioning — 0.07 N/m is the *water–air*
+   surface tension; two aqueous wellbore fluids are nearer 0–1 mN/m.
+2. **The "drilling fluid" is water** — 998 kg/m³, 1 cP, Newtonian. No yield
+   stress, so it can never be stranded by failing to yield, and the viscosity
+   ratio (thick displacing thin) is unconditionally stable.
 
 ## Mud left behind by the washouts
 

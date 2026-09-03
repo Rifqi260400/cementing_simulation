@@ -47,6 +47,7 @@ from scipy.integrate import quad
 from scipy.optimize import brentq
 
 from .fluid import Fluid
+from .rheology import stress_moment, velocity_integral
 
 __all__ = [
     "VelocityProfile",
@@ -81,14 +82,25 @@ class VelocityProfile:
     fluid: Fluid
     radius: float
     tau_w: float
+    #: Fluent-style regularisation shear rate [1/s]; ``None`` is the exact law
+    #: with a rigid plug.  See :mod:`inpipe.rheology`.
+    gammadot_c: float | None = None
 
     @property
     def plug_radius(self) -> float:
+        """Radius of the rigid plug [m]; zero under regularisation.
+
+        The regularised law shears everywhere, so there is no plug to report.
+        """
+        if self.gammadot_c is not None:
+            return 0.0
         return plug_radius(self.fluid.tau0, self.radius, self.tau_w)
 
     @property
     def plug_velocity(self) -> float:
         """Velocity of the unyielded plug, equal to the centreline velocity."""
+        if self.gammadot_c is not None:
+            return float(self(0.0))
         return _coefficient_B(self.fluid, self.radius, self.tau_w)
 
     @property
@@ -96,11 +108,13 @@ class VelocityProfile:
         return self.plug_velocity
 
     def __call__(self, r):
-        return velocity_profile(r, self.fluid, self.radius, self.tau_w)
+        return velocity_profile(r, self.fluid, self.radius, self.tau_w,
+                                gammadot_c=self.gammadot_c)
 
     @property
     def flow_rate(self) -> float:
-        return flow_rate(self.fluid, self.radius, self.tau_w)
+        return flow_rate(self.fluid, self.radius, self.tau_w,
+                         gammadot_c=self.gammadot_c)
 
     @property
     def mean_velocity(self) -> float:
@@ -136,7 +150,8 @@ def _coefficient_B(fluid: Fluid, R: float, tau_w: float) -> float:
     return (T_R / fluid.k) ** exponent * fluid.k / (exponent * (tau_w / R))
 
 
-def velocity_profile(r, fluid: Fluid, R: float, tau_w: float):
+def velocity_profile(r, fluid: Fluid, R: float, tau_w: float,
+                     gammadot_c: float | None = None):
     """Axial velocity ``u(r)`` [m/s] (paper Eq. A.3).
 
     Accepts a scalar or an array of radii.  Radii outside ``[0, R]`` are not
@@ -145,6 +160,17 @@ def velocity_profile(r, fluid: Fluid, R: float, tau_w: float):
     r_arr = np.asarray(r, dtype=float)
     if np.any(r_arr < 0.0) or np.any(r_arr > R * (1.0 + 1e-12)):
         raise ValueError("radius outside [0, R]")
+
+    if gammadot_c is not None:
+        # u(r) = (R/tau_w) * int_{tau(r)}^{tau_w} gammadot(tau) dtau, the same
+        # integral as the exact case but with no closed form (rheology module).
+        if tau_w <= 0.0:
+            out = np.zeros_like(r_arr)
+            return out if out.ndim else float(out)
+        tau_r = tau_w * np.minimum(r_arr, R) / R
+        u = (R / tau_w) * velocity_integral(tau_w, tau_r, fluid, gammadot_c)
+        u = np.where(r_arr >= R - 1e-15, 0.0, u)
+        return u if u.ndim else float(u)
 
     if tau_w <= fluid.tau0:
         # Wall stress below the yield stress: the whole section is unyielded
@@ -174,7 +200,8 @@ def velocity_profile(r, fluid: Fluid, R: float, tau_w: float):
 # ---------------------------------------------------------------------------
 
 
-def flow_rate(fluid: Fluid, R: float, tau_w: float) -> float:
+def flow_rate(fluid: Fluid, R: float, tau_w: float,
+              gammadot_c: float | None = None) -> float:
     """``Q = int_0^R u(r) 2 pi r dr`` [m^3/s] (paper Eq. A.2), in closed form.
 
     Integrating Eq. A.2 by parts (``u(R) = 0``) gives ``Q = pi int_0^R r^2
@@ -198,6 +225,13 @@ def flow_rate(fluid: Fluid, R: float, tau_w: float) -> float:
     :func:`flow_rate_quad` and the two are asserted equal across rheologies in
     ``tests/test_velocity.py``.
     """
+    if gammadot_c is not None:
+        # Q = pi (R/tau_w)^3 int_0^{tau_w} tau^2 gammadot(tau) dtau
+        if tau_w <= 0.0:
+            return 0.0
+        return float(math.pi * (R / tau_w) ** 3
+                     * stress_moment(tau_w, fluid, gammadot_c, 2))
+
     if tau_w <= fluid.tau0:
         return 0.0
 
@@ -260,6 +294,7 @@ def solve_tau_w(
     R: float,
     xtol: float = 1.0e-12,
     rtol: float = 1.0e-12,
+    gammadot_c: float | None = None,
 ) -> float:
     """Invert ``Q(tau_w) = q_target`` for the wall shear stress [Pa].
 
@@ -273,23 +308,23 @@ def solve_tau_w(
     if q_target < 0.0:
         raise ValueError("negative target flow rate is not supported")
     if q_target == 0.0:
-        return fluid.tau0
+        return fluid.tau0 if gammadot_c is None else 0.0
 
     hi = _initial_upper_bracket(fluid, R, q_target)
 
     # Lower bracket: just above the yield stress, below which there is no flow
-    # at all.  For a fluid without yield stress there is no such floor, so the
-    # bracket is scaled off the analytical guess and shrunk until the residual
-    # is negative.
-    if fluid.tau0 > 0.0:
+    # at all.  For a fluid without yield stress - or under regularisation,
+    # which shears at any stress - there is no such floor, so the bracket is
+    # scaled off the analytical guess and shrunk until the residual is negative.
+    if fluid.tau0 > 0.0 and gammadot_c is None:
         lo = fluid.tau0 * (1.0 + _TAU_W_BRACKET_EPS)
     else:
         lo = hi * 1.0e-8
         for _ in range(_BRACKET_MAX_ITER):
-            if flow_rate(fluid, R, lo) - q_target < 0.0:
+            if flow_rate(fluid, R, lo, gammadot_c) - q_target < 0.0:
                 break
             lo *= 1.0e-4
-    f_lo = flow_rate(fluid, R, lo) - q_target
+    f_lo = flow_rate(fluid, R, lo, gammadot_c) - q_target
     if f_lo > 0.0:  # pragma: no cover - defensive
         raise NoBracketError(
             f"Q at the lower bracket already exceeds the target "
@@ -297,7 +332,7 @@ def solve_tau_w(
         )
 
     for _ in range(_BRACKET_MAX_ITER):
-        if flow_rate(fluid, R, hi) - q_target > 0.0:
+        if flow_rate(fluid, R, hi, gammadot_c) - q_target > 0.0:
             break
         hi *= _BRACKET_GROWTH
     else:
@@ -307,7 +342,7 @@ def solve_tau_w(
         )
 
     return brentq(
-        lambda tw: flow_rate(fluid, R, tw) - q_target,
+        lambda tw: flow_rate(fluid, R, tw, gammadot_c) - q_target,
         lo,
         hi,
         xtol=xtol,
@@ -316,9 +351,11 @@ def solve_tau_w(
     )
 
 
-def solve_profile(q_target: float, fluid: Fluid, R: float, **kwargs) -> VelocityProfile:
+def solve_profile(q_target: float, fluid: Fluid, R: float,
+                  gammadot_c: float | None = None, **kwargs) -> VelocityProfile:
     """Convenience wrapper: solve for ``tau_w`` and return the profile."""
-    return VelocityProfile(fluid=fluid, radius=R, tau_w=solve_tau_w(q_target, fluid, R, **kwargs))
+    tau_w = solve_tau_w(q_target, fluid, R, gammadot_c=gammadot_c, **kwargs)
+    return VelocityProfile(fluid=fluid, radius=R, tau_w=tau_w, gammadot_c=gammadot_c)
 
 
 # ---------------------------------------------------------------------------

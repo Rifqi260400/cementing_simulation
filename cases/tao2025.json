@@ -1,0 +1,37 @@
+{
+  "name": "Tao et al. 2025",
+  "notes": "Materials 18, 3098. Table 1 fluid properties, Section 3 geometry. Edit any value here; nothing in the code needs changing.",
+  "fluids": {
+    "displaced": {
+      "name": "drilling fluid",
+      "rho": 998.0,
+      "tau0": 0.0,
+      "k": 0.001,
+      "n": 1.0
+    },
+    "displacing": {
+      "name": "cement slurry",
+      "rho": 1200.0,
+      "tau0": 1.4,
+      "k": 0.6,
+      "n": 0.4
+    }
+  },
+  "geometry": {
+    "length": 1.0,
+    "casing_id": 0.16,
+    "casing_od": 0.20,
+    "hole_diameter": 0.40
+  },
+  "flow": {
+    "inlet_velocity": 0.5,
+    "excess": 1.05
+  },
+  "interface": {
+    "surface_tension": 0.07
+  },
+  "rheology": {
+    "regularisation_shear_rate": 5.5,
+    "normalise_consistency": false
+  }
+}

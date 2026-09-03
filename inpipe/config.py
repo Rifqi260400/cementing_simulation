@@ -170,6 +170,15 @@ class NumericsConfig:
     velocity_mapping: str = "area_average"
     #: Number of steps between diagnostic records.
     diagnostics_every: int = 10
+    #: Fluent-style Herschel-Bulkley regularisation shear rate [1/s].  ``None``
+    #: is the exact law with a rigid plug (the in-pipe paper's own form); set it
+    #: to match an ANSYS-Fluent run, which shears at every stress and so has no
+    #: plug at all.  See :mod:`inpipe.rheology` and assumption A-38.
+    regularisation_shear_rate: float | None = None
+    #: Follow Tao et al. Eqs. (15)-(16) literally, normalising the consistency
+    #: index by the regularisation shear rate.  Default False keeps ``k``
+    #: literal, which is what preserves their Eq. (14) and Table 1.
+    normalise_consistency: bool = False
     #: Decimal places used to key the per-station velocity-profile cache on the
     #: effective (tau0, k, n).  Chosen so that stations differing only by
     #: round-off share a solve; ~1e-9 relative at field-scale magnitudes.
@@ -179,6 +188,39 @@ class NumericsConfig:
     cache_limit: int = 4096
 
 
+@dataclass(frozen=True)
+class InterfaceConfig:
+    """Properties of the interface between the two fluids.
+
+    **Reported, not modelled.**  This solver advects volume fractions with no
+    interfacial tension term - there is no momentum equation for one to enter.
+    Storing ``surface_tension`` lets the dimensionless groups it governs be
+    computed and reported, so it is visible *when* the miscible assumption
+    stops being defensible; it does not make the model immiscible.
+
+    A capillary number of order one means interfacial tension is shaping the
+    interface in the reference case and this model is missing that physics.
+    """
+
+    #: Interfacial tension between the two fluids [N/m].  Tao et al. use 0.07,
+    #: which is the water-air value; two aqueous wellbore fluids are nearer
+    #: 0-1 mN/m and largely miscible.
+    surface_tension: float = 0.0
+
+    def capillary_number(self, viscosity: float, velocity: float) -> float:
+        """``Ca = mu U / sigma`` - viscous against interfacial forces."""
+        if self.surface_tension <= 0.0:
+            return float("inf")
+        return viscosity * velocity / self.surface_tension
+
+    def bond_number(self, delta_rho: float, length: float,
+                    gravity: float = G_ACCEL) -> float:
+        """``Bo = drho g L^2 / sigma`` - buoyancy against interfacial forces."""
+        if self.surface_tension <= 0.0:
+            return float("inf")
+        return delta_rho * gravity * length**2 / self.surface_tension
+
+
 @dataclass
 class SimulationConfig:
     """Top-level configuration bundle."""
@@ -186,4 +228,5 @@ class SimulationConfig:
     geometry: GeometryConfig
     grid: GridConfig
     numerics: NumericsConfig = field(default_factory=NumericsConfig)
+    interface: InterfaceConfig = field(default_factory=InterfaceConfig)
     gravity: float = G_ACCEL

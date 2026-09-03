@@ -177,3 +177,67 @@ density segregation into the enlarged cavity, and mud left below its yield
 stress in the low-shear pocket (A-30). If the purpose of modelling
 enlargements is to predict where cement fails, at least eccentricity is
 needed — it is the one the paper's own stratified grid exists to represent.
+
+
+---
+
+## D. Yield-stress treatment and the CFD comparison
+
+| ID | Ref | What the source specifies | What is missing | Our choice | Justification | Sensitivity tested? |
+|----|-----|---------------------------|-----------------|------------|----------------|---------------------|
+| A-38 | Tao et al. (2025) Eqs. 14–16 | Herschel–Bulkley with a critical shear rate `γ̇_c = 5.5 s⁻¹` | Which branch applies where, and whether `k` is normalised | **Fluent-style regularisation**, selectable via `NumericsConfig.regularisation_shear_rate`; `None` keeps the exact law with a rigid plug (the Dai et al. form and still the default for well cases) | Under regularisation the viscosity is capped below `γ̇_c` instead of infinite, so **there is no plug**: every point shears at any stress. On the Tao et al. annulus that changes `u_max/ū` from **1.14 to 1.36** and removes a plug occupying **44 % of the gap** — a first-order change in the profile, concentrated exactly in the slow region where fluid is left behind | yes — both treatments run and compared |
+| A-39 | Tao et al. Eqs. 15–16 | The two viscosity branches | The inequalities are printed the wrong way round | Swap them | As printed, the `τ_y/γ̇` branch is assigned to `γ̇ < γ̇_c`, where it **diverges** as `γ̇ → 0` and so cannot be a regularisation; and the bi-viscosity branch is assigned to `γ̇ > γ̇_c`, where it goes **negative above 2γ̇_c**. Neither is usable as printed; swapping is the only reading that gives a working model | n/a |
+| A-40 | Tao et al. Eq. 15 vs Eq. 14 | `k(γ̇/γ̇_c)^(n−1)` in Eq. 15; `τ = τ_y + kγ̇ⁿ` with `k = 0.6` in Eq. 14 and Table 1 | Which is authoritative | Keep **`k` literal** (`k γ̇^(n−1)`), matching Eq. 14 and Table 1; `normalise_consistency=True` follows Eq. 15 instead | **I first assumed continuity settled this. It does not — both forms join continuously at `γ̇_c`**, so continuity is no discriminator. What settles it is Eq. 14: the normalised reading implies an effective consistency of `k γ̇_c^(1−n)` = **1.669 Pa·sⁿ against the 0.6 of Table 1**, a factor of 2.8, so the paper's Eqs. 15–16 contradict its own Eq. 14. The literal form is also the only one that reduces to the exact law as `γ̇_c → 0` (verified to 3e-8); under the normalised form `k γ̇_c^(1−n) → 0` for `n < 1`, so shrinking `γ̇_c` thins the fluid away instead of sharpening the plug | yes — both readings selectable, limit behaviour tested |
+| A-41 | Tao et al. Table 1 | `σ = 0.07 N/m` between slurry and drilling fluid | — | **Carried and reported, not modelled.** `InterfaceConfig.surface_tension` stores it and reports `Ca` and `Bo`; the transport remains miscible | This solver advects volume fractions with no momentum equation, so no interfacial-tension term can enter — adding the number does not make the model immiscible, and it would be wrong to imply otherwise. Reporting it makes visible *when* the miscible assumption stops being defensible: on the Tao et al. case `Ca = μU/σ` is **0.07–1.3**, order one, so interfacial tension is shaping their interface and this model is blind to it. The value itself is also questionable — 0.07 N/m is the *water–air* surface tension; two aqueous wellbore fluids are nearer 0–1 mN/m and largely miscible | n/a |
+| A-42 | — | — | How to vary fluid properties without editing code | JSON case files (`cases/tao2025.json`, `inpipe/caseio.py`) carrying fluids, geometry, flow, interfacial tension and rheology treatment | Unknown keys are **rejected rather than ignored**, so a mistyped property name fails loudly instead of silently leaving a default in place — which in a validation study is the worst kind of quiet error | n/a |
+
+### The cost of the regularised path, and what it is worth
+
+The regularised branch has no closed-form flow rate, so every wall-stress
+solve and every velocity profile goes through numerical quadrature where the
+exact law evaluates an algebraic expression. Measured on the Tao et al. case
+(100 x 13 x 8, warmed, per step):
+
+| Path | ms/step |
+|------|---------|
+| exact Herschel–Bulkley (closed form) | 10.3 |
+| regularised, as it now stands | 52.4 |
+
+**A tabulation attempt was reverted, and the record of it is worth keeping.**
+The cumulative moment integrals depend only on the rheology, so caching one
+table per fluid looks obviously right, and on a single-fluid microbenchmark it
+was ~50× faster than quadrature. In the solver it was **4047 ms/step — 80×
+slower than doing nothing**. The reason is that the solver mixes: every station
+holding an interface has its own effective rheology, so nearly every lookup was
+a fresh table build, and the builds grow with the stress range. A cache whose
+key space is created by the thing it is meant to accelerate cannot amortise.
+The microbenchmark could not show this because it held the fluid fixed.
+
+Two things did work, and are what the 52.4 ms rests on:
+
+- the Gauss–Legendre nodes are computed once rather than by an eigenvalue
+  decomposition on every stress moment — that alone was 3.1 s of every 4.0 s;
+- `shear_rate` evaluates each branch only where it applies. It previously
+  computed both over the whole array and selected afterwards, paying a
+  fractional power and a square root on every point regardless; inside a
+  quadrature piece, which lies entirely on one side of the kink, the other
+  branch is now skipped outright (69.5 → 52.4 ms/step, results bitwise equal).
+
+Two defects were found on the way, both of which produced wrong numbers rather
+than slow ones:
+
+- `stress_moment` split its interval at the critical stress without clamping
+  the pieces into the interval, so an interval lying **wholly below** `τ_c`
+  got a yielded piece of negative width and returned a **negative** moment.
+  Every station below the critical stress had a negative flow rate.
+- the flow rate is `Q = π (R/τ_w)³ ∫ τ² γ̇ dτ`. Anything that misrepresents
+  the shape of that moment near the origin is amplified by the cube: the
+  interpolated table reported it as linear in `τ` where it truly goes as `τ⁴`,
+  so `Q` **diverged** as `τ_w → 0` instead of vanishing, and the wall-stress
+  bracket search overflowed walking down. Both are now pinned by tests
+  (`test_stress_moment_is_positive_below_the_critical_stress`,
+  `test_flow_rate_vanishes_with_the_wall_stress`).
+
+| ID | Ref | What the source specifies | What is missing | Our choice | Justification | Sensitivity tested? |
+|----|-----|---------------------------|-----------------|------------|----------------|---------------------|
+| A-43 | — | — | Quadrature order for the regularised stress moments | **24 Gauss–Legendre nodes per smooth piece** | Convergence is algebraic, not spectral: the yielded branch carries a `(τ − τ₀)^(1/n)` branch point just outside its interval. Measured worst-case relative error against a 96-node rule, over four fluids × three `γ̇_c` × three moment orders × six stresses: 6 nodes 5.5e-4, 12 nodes 2.3e-5, **24 nodes 1.6e-7**, 48 nodes 1.1e-9. 24 is the knee — 48 costs 1.7× the runtime for accuracy already far below the discretisation error | yes — pinned against a 160-node rule in `tests/test_rheology.py` |

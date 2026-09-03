@@ -272,11 +272,13 @@ class CirculationSolver:
             cached = self._casing_cache.get(key)
             if cached is None:
                 fl = Fluid("eff", float(rho), float(tau0), float(kk), float(n))
+                gc = self.numerics.regularisation_shear_rate
                 tau_w = solve_tau_w(q, fl, grid.radius,
                                     xtol=self.numerics.brentq_xtol,
-                                    rtol=self.numerics.brentq_rtol)
+                                    rtol=self.numerics.brentq_rtol,
+                                    gammadot_c=gc)
                 cached = grid.map_velocity(
-                    VelocityProfile(fl, grid.radius, tau_w),
+                    VelocityProfile(fl, grid.radius, tau_w, gammadot_c=gc),
                     self.numerics.velocity_mapping,
                 )
                 if len(self._casing_cache) >= self.numerics.cache_limit:
@@ -301,10 +303,13 @@ class CirculationSolver:
             prof = self._slot_cache.get(key)
             if prof is None:
                 fl = Fluid("eff", float(rho), float(tau0), float(kk), float(n))
+                gc = self.numerics.regularisation_shear_rate
                 prof = SlotProfile(fl, b, width,
                                    solve_slot_tau_w(q, fl, b, width,
                                                     xtol=self.numerics.brentq_xtol,
-                                                    rtol=self.numerics.brentq_rtol))
+                                                    rtol=self.numerics.brentq_rtol,
+                                                    gammadot_c=gc),
+                                   gammadot_c=gc)
                 if len(self._slot_cache) >= self.numerics.cache_limit:
                     self._slot_cache.clear()
                 self._slot_cache[key] = prof
@@ -392,7 +397,9 @@ class CirculationSolver:
         for rho, tau0, kk, n in casing_params:
             fl = Fluid("eff", float(rho), float(tau0), float(kk), float(n))
             casing_tau_w.append(
-                solve_tau_w(q, fl, self.casing_grid.radius) if q > 0.0 else 0.0
+                solve_tau_w(q, fl, self.casing_grid.radius,
+                            gammadot_c=self.numerics.regularisation_shear_rate)
+                if q > 0.0 else 0.0
             )
         return circulation_pressure(
             casing_z=self.casing_grid.z_centers,

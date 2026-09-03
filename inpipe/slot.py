@@ -35,6 +35,7 @@ import math
 from scipy.optimize import brentq
 
 from .fluid import Fluid
+from .rheology import stress_moment
 from .velocity import NoBracketError, velocity_profile
 
 __all__ = [
@@ -60,7 +61,8 @@ def slot_geometry(r_inner: float, r_outer: float) -> tuple[float, float]:
     return 0.5 * (r_outer - r_inner), math.pi * (r_outer + r_inner)
 
 
-def slot_flow_rate(fluid: Fluid, b: float, width: float, tau_w: float) -> float:
+def slot_flow_rate(fluid: Fluid, b: float, width: float, tau_w: float,
+                   gammadot_c: float | None = None) -> float:
     """``Q`` through a slot of half-gap ``b`` and width ``width`` [m^3/s].
 
     Integrating ``Q = W * int_{-b}^{b} u ds`` by parts with ``u(+-b) = 0`` and
@@ -72,6 +74,13 @@ def slot_flow_rate(fluid: Fluid, b: float, width: float, tau_w: float) -> float:
     Newtonian fluid this reduces to plane Poiseuille, ``Q = 2 W b^2 tau_w /
     (3 mu)``, and the peak-to-mean ratio to 3/2.
     """
+    if gammadot_c is not None:
+        # Q = 2 W (b/tau_w)^2 int_0^{tau_w} tau gammadot(tau) dtau
+        if tau_w <= 0.0:
+            return 0.0
+        return float(2.0 * width * (b / tau_w) ** 2
+                     * stress_moment(tau_w, fluid, gammadot_c, 1))
+
     if tau_w <= fluid.tau0:
         return 0.0
     n, k, tau0 = fluid.n, fluid.k, fluid.tau0
@@ -98,25 +107,26 @@ def solve_slot_tau_w(
     width: float,
     xtol: float = 1.0e-12,
     rtol: float = 1.0e-12,
+    gammadot_c: float | None = None,
 ) -> float:
     """Invert ``Q(tau_w) = q_target`` for the slot wall shear stress [Pa]."""
     if q_target < 0.0:
         raise ValueError("negative target flow rate is not supported")
     if q_target == 0.0:
-        return fluid.tau0
+        return fluid.tau0 if gammadot_c is None else 0.0
 
     hi = _initial_upper_bracket(fluid, b, width, q_target)
-    if fluid.tau0 > 0.0:
+    if fluid.tau0 > 0.0 and gammadot_c is None:
         lo = fluid.tau0 * (1.0 + _TAU_W_BRACKET_EPS)
     else:
         lo = hi * 1.0e-8
         for _ in range(_BRACKET_MAX_ITER):
-            if slot_flow_rate(fluid, b, width, lo) - q_target < 0.0:
+            if slot_flow_rate(fluid, b, width, lo, gammadot_c) - q_target < 0.0:
                 break
             lo *= 1.0e-4
 
     for _ in range(_BRACKET_MAX_ITER):
-        if slot_flow_rate(fluid, b, width, hi) - q_target > 0.0:
+        if slot_flow_rate(fluid, b, width, hi, gammadot_c) - q_target > 0.0:
             break
         hi *= _BRACKET_GROWTH
     else:
@@ -126,7 +136,7 @@ def solve_slot_tau_w(
         )
 
     return brentq(
-        lambda tw: slot_flow_rate(fluid, b, width, tw) - q_target,
+        lambda tw: slot_flow_rate(fluid, b, width, tw, gammadot_c) - q_target,
         lo, hi, xtol=xtol, rtol=rtol, maxiter=200,
     )
 
@@ -139,19 +149,25 @@ class SlotProfile:
     only the half-gap is parameterised.
     """
 
-    def __init__(self, fluid: Fluid, half_gap: float, width: float, tau_w: float):
+    def __init__(self, fluid: Fluid, half_gap: float, width: float, tau_w: float,
+                 gammadot_c: float | None = None):
         self.fluid = fluid
         self.half_gap = half_gap
         self.width = width
         self.tau_w = tau_w
+        #: Fluent-style regularisation shear rate; ``None`` is the exact law.
+        self.gammadot_c = gammadot_c
 
     def __call__(self, s):
         # Identical functional form to the pipe profile with R -> b.
-        return velocity_profile(s, self.fluid, self.half_gap, self.tau_w)
+        return velocity_profile(s, self.fluid, self.half_gap, self.tau_w,
+                                gammadot_c=self.gammadot_c)
 
     @property
     def plug_half_width(self) -> float:
-        """Half-width of the unyielded plug, ``s0 = tau0 b / tau_w`` [m]."""
+        """Half-width of the rigid plug [m]; zero under regularisation."""
+        if self.gammadot_c is not None:
+            return 0.0
         if self.tau_w <= 0.0:
             return self.half_gap
         return min(self.half_gap, self.fluid.tau0 * self.half_gap / self.tau_w)
@@ -162,7 +178,8 @@ class SlotProfile:
 
     @property
     def flow_rate(self) -> float:
-        return slot_flow_rate(self.fluid, self.half_gap, self.width, self.tau_w)
+        return slot_flow_rate(self.fluid, self.half_gap, self.width, self.tau_w,
+                              gammadot_c=self.gammadot_c)
 
     @property
     def area(self) -> float:
@@ -184,12 +201,13 @@ class SlotProfile:
 
 
 def solve_slot_profile(
-    q_target: float, fluid: Fluid, r_inner: float, r_outer: float, **kwargs
+    q_target: float, fluid: Fluid, r_inner: float, r_outer: float,
+    gammadot_c: float | None = None, **kwargs
 ) -> SlotProfile:
     """Solve the slot profile for an annulus of the given radii."""
     b, width = slot_geometry(r_inner, r_outer)
-    tau_w = solve_slot_tau_w(q_target, fluid, b, width, **kwargs)
-    return SlotProfile(fluid, b, width, tau_w)
+    tau_w = solve_slot_tau_w(q_target, fluid, b, width, gammadot_c=gammadot_c, **kwargs)
+    return SlotProfile(fluid, b, width, tau_w, gammadot_c=gammadot_c)
 
 
 def slot_error_estimate(r_inner: float, r_outer: float) -> float:
