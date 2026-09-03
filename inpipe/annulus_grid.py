@@ -169,6 +169,7 @@ class AnnulusGrid:
                 u[k] = velocity_profile(
                     np.minimum(self.cell_s[k], prof.half_gap),
                     prof.fluid, prof.half_gap, prof.tau_w,
+                    gammadot_c=prof.gammadot_c,
                 )
             return u
         if method != "area_average":
@@ -177,8 +178,14 @@ class AnnulusGrid:
         S, W = self._quadrature()
         u = np.empty(self.shape)
         for k, prof in enumerate(profiles):
+            # The regularisation has to come through here as well.  Solving
+            # tau_w with one law and then mapping the profile with another is a
+            # silent inconsistency, and where the mixture's yield stress rises
+            # above tau_w the exact law returns a rigid section - zero velocity
+            # at that station - while the regularised one keeps flowing.
             vals = velocity_profile(
-                np.minimum(S[k], prof.half_gap), prof.fluid, prof.half_gap, prof.tau_w
+                np.minimum(S[k], prof.half_gap), prof.fluid, prof.half_gap,
+                prof.tau_w, gammadot_c=prof.gammadot_c,
             )
             u[k] = (W[k] * vals).sum(axis=1)[:, None]
         return u

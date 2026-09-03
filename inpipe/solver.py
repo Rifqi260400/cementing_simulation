@@ -223,12 +223,15 @@ class InPipeSolver:
         if cached is None:
             fluid = Fluid(name="eff", rho=float(rho), tau0=float(tau0),
                           k=float(kk), n=float(n))
+            gc = self.config.numerics.regularisation_shear_rate
             tau_w = solve_tau_w(
                 q, fluid, self.grid.radius,
                 xtol=self.config.numerics.brentq_xtol,
                 rtol=self.config.numerics.brentq_rtol,
+                gammadot_c=gc,
             )
-            prof = VelocityProfile(fluid=fluid, radius=self.grid.radius, tau_w=tau_w)
+            prof = VelocityProfile(fluid=fluid, radius=self.grid.radius, tau_w=tau_w,
+                                   gammadot_c=gc)
             cached = self.grid.map_velocity(prof, self.config.numerics.velocity_mapping)
             if len(self._profile_cache) >= self.config.numerics.cache_limit:
                 self._profile_cache.clear()

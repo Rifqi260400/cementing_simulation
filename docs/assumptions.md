@@ -223,8 +223,23 @@ Two things did work, and are what the 52.4 ms rests on:
   quadrature piece, which lies entirely on one side of the kink, the other
   branch is now skipped outright (69.5 → 52.4 ms/step, results bitwise equal).
 
-Two defects were found on the way, both of which produced wrong numbers rather
-than slow ones:
+A third defect was worse than either, because it was invisible in every number
+the case reported: `AnnulusGrid.map_velocity` evaluated the slot profile
+**without** the regularisation. The wall stress was solved under Fluent's law
+and the velocity field the solver then advected was built under the exact one.
+The reported wall stress, plug fraction and `u_max/ū` all came from the
+profile object and so all read correctly; only the field was wrong. It
+surfaced at the lowest inlet velocity, where the trace of slurry in a
+freshly-mixed station lifts the mixture's yield stress *above* the wall stress
+that station's flow rate needs: the exact law then calls the whole section
+rigid and returns zero velocity, discrete continuity fails at that station,
+and `sum_i f_i` drifts 5.5e-2. `InPipeSolver` ignored the setting the same
+way. Both now thread it through, pinned by
+`test_annulus_mapping_carries_the_regularisation` and
+`test_the_in_pipe_solver_honours_the_regularisation`.
+
+Two further defects were found on the way, both of which produced wrong numbers
+rather than slow ones:
 
 - `stress_moment` split its interval at the critical stress without clamping
   the pieces into the interval, so an interval lying **wholly below** `τ_c`

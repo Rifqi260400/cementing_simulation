@@ -15,7 +15,7 @@ from inpipe.rheology import (
     stress_moment,
     velocity_integral,
 )
-from inpipe.slot import solve_slot_profile
+from inpipe.slot import SlotProfile, solve_slot_profile
 from inpipe.velocity import solve_profile
 
 CEMENT = Fluid("cement slurry", 1200.0, 1.4, 0.6, 0.4)   # Tao et al. Table 1
@@ -236,3 +236,76 @@ def test_regularised_profile_is_more_peaked_than_the_exact_one():
     assert reg.u_max / reg.mean_velocity > exact.u_max / exact.mean_velocity
     assert exact.u_max / exact.mean_velocity == pytest.approx(1.14, abs=0.03)
     assert reg.u_max / reg.mean_velocity == pytest.approx(1.36, abs=0.03)
+
+
+# --- the regularisation must reach the field the solver advects --------------
+
+
+def _mixture_whose_yield_stress_exceeds_its_wall_stress():
+    """A mostly-water mixture carrying a trace of slurry.
+
+    This is what an annulus station holds on the step the cement front reaches
+    it, and it is the awkward case: the yield stress inherited from the trace
+    of slurry sits *above* the wall stress the flow rate needs, so the exact
+    law calls the whole section rigid and the regularised law does not.
+    """
+    return Fluid("eff", 998.2, 1.4419e-3, 1.6169e-3, 0.99938), 1.0053e-3
+
+
+def test_annulus_mapping_carries_the_regularisation():
+    """The mapped field, not just the reported diagnostics, must be regularised.
+
+    Solving ``tau_w`` under one law and then evaluating the profile under
+    another is silent: the wall stress, the plug fraction and ``u_max/u_bar``
+    all still read correctly, while the velocity field the solver actually
+    advects is a different fluid's.  Here it is not even subtly different - the
+    exact law returns zero across the whole station, which breaks discrete
+    continuity and takes ``sum_i f_i`` with it.
+    """
+    from inpipe.annulus_grid import AnnulusGrid
+    from inpipe.caliper import CaliperLog
+    from inpipe.slot import solve_slot_tau_w
+
+    fluid, q = _mixture_whose_yield_stress_exceeds_its_wall_stress()
+    caliper = CaliperLog(np.array([0.0, 1.0]), np.array([0.4, 0.4]))
+    grid = AnnulusGrid(1.0, 0.2, caliper, 4, 13, 8)
+    b, width = float(grid.half_gap[0]), float(grid.slot_width[0])
+    tau_w = solve_slot_tau_w(q, fluid, b, width, gammadot_c=GC)
+    assert tau_w < fluid.tau0, "this test is pointless unless the laws disagree"
+
+    profiles = [SlotProfile(fluid, b, width, tau_w, gammadot_c=GC)] * grid.n_axial
+    u = grid.map_velocity(profiles, "area_average")
+    assert np.all(u[0] > 0.0), "the regularised field must flow everywhere"
+
+    # And it must be the profile's own values, not merely non-zero.
+    assert float(np.einsum("lm,lm->", u[0], grid.cell_area[0])) == pytest.approx(
+        q, rel=1.0e-3
+    )
+
+
+def test_the_in_pipe_solver_honours_the_regularisation():
+    """``NumericsConfig.regularisation_shear_rate`` must not be silently ignored."""
+    from inpipe.config import (
+        GeometryConfig,
+        GridConfig,
+        NumericsConfig,
+        SimulationConfig,
+    )
+    from inpipe.fluid import PumpSchedule, PumpStage
+    from inpipe.solver import InPipeSolver
+
+    q = 1.0e-3
+
+    def field(gammadot_c):
+        config = SimulationConfig(
+            geometry=GeometryConfig(length=1.0, inner_diameter=0.16),
+            grid=GridConfig(n_axial=8, n_layer=9, n_azimuth=8),
+            numerics=NumericsConfig(regularisation_shear_rate=gammadot_c),
+        )
+        schedule = PumpSchedule([PumpStage(CEMENT, q * 10.0, q)])
+        solver = InPipeSolver(config, schedule, initial_fluid=CEMENT)
+        return solver.velocity_field(q)
+
+    exact, regularised = field(None), field(GC)
+    # No plug under regularisation, so the profile is more peaked.
+    assert np.max(regularised) / np.mean(regularised) > np.max(exact) / np.mean(exact)
