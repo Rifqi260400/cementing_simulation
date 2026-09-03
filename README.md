@@ -89,6 +89,58 @@ says so. Nothing is trimmed silently — `--keep-tail` leaves it in.
 | U-tube imbalance | peaks at **21.8 bar (316 psi)**, free-fall **99 %** of the job | 18.6 bar, 92 % |
 | conservation | sum-to-one 1.6e-13, volume 1.1e-15 | 1.3e-13, 7.9e-16 |
 
+## CFD comparison — matched to Tao et al. (2025)
+
+```bash
+.venv/bin/python -m cases.validation_tao2025            # all three inlet velocities
+.venv/bin/python -m cases.validation_tao2025 --irregular  # Case-2 wavy wall
+```
+
+Fluids and geometry follow Tao, Wang, Ahmadi & Massoudi (2025), *Materials* 18,
+3098 — cement slurry `ρ = 1200`, Herschel–Bulkley `τ_y = 1.4 Pa`, `k = 0.6`,
+`n = 0.4`; drilling fluid `ρ = 998`, Newtonian `μ = 1 cP`; 1 m of 16 cm ID /
+20 cm OD casing in a 40 cm hole. Exports
+`results/tao2025_radial_u*.csv` — cement fraction across the annular gap,
+ready to overlay on a CFD line probe.
+
+### Where the two agree, and where they do not
+
+| | this model | Tao et al. CFD |
+|---|---|---|
+| irregular vs smooth wall | 0.8905 vs 0.8717 — **irregular better** | "efficiency … higher in Case-2 (irregular)" — **agrees** |
+| best inlet velocity | 0.05 m/s (0.913) > 0.2 (0.888) > 0.5 (0.872) | 0.5 m/s optimal, 0.2 > 0.05 — **opposite** |
+
+The agreement on wall roughness is independent corroboration of the
+profile-flattening mechanism, from a completely different method.
+
+The disagreement on velocity is the informative one. This model is monotonic —
+slower flow means a larger plug and a flatter profile, so better displacement.
+The CFD finds the reverse, and the likely reason is buoyancy: the densimetric
+Froude number `Fr = ū/√(At·g·h)` is **0.36, 0.14 and 0.036** at the three inlet
+velocities, i.e. *below one everywhere and falling*. At `Fr ≪ 1` the density
+contrast governs rather than the imposed flow, and slower means more time for it
+to act. **This model has no buoyancy mechanism at all** (assumption A-29), so it
+cannot reproduce that trend and should not be trusted on rate optimisation.
+
+### Three mismatches to fix before quoting agreement
+
+1. **Yield-stress treatment.** Fluent regularises Herschel–Bulkley below
+   `γ̇_c = 5.5 s⁻¹`, capping the viscosity at `τ_y/γ̇_c + k γ̇_c^(n−1)` =
+   **0.470 Pa·s** and making the slurry a 470×-water *Newtonian* there. This
+   model uses the unregularised law with a true unyielded plug. The annulus in
+   this geometry runs at a nominal shear rate of **0.6–6.4 s⁻¹**, straddling the
+   cut-off, so much of it sits in the regularised regime — where this model puts
+   a plug filling **40–63 % of the gap**. Biggest single mismatch, and it lives
+   exactly in the slow region where mud is left.
+2. **Interfacial tension.** The CFD applies `σ = 0.07 N/m` between slurry and
+   drilling fluid, giving `Ca = μU/σ` of **0.07–0.72** — order one, so it shapes
+   the interface. That value is the *water–air* surface tension; two aqueous
+   wellbore fluids are closer to 0–1 mN/m and are substantially miscible. This
+   model is miscible with no interfacial tension at all.
+3. **The "drilling fluid" is water** — 998 kg/m³, 1 cP, Newtonian. It has no
+   yield stress, so it can never be stranded by failing to yield, and the
+   viscosity ratio (thick displacing thin) is unconditionally stable.
+
 ## Mud left behind by the washouts
 
 ```bash
