@@ -94,9 +94,12 @@ def test_volumetric_arrival_counts_the_casing_first():
 def short_job():
     from cases.circulation import build
 
+    # Geometry pinned here, not inherited from the case file: a test that
+    # tracks a configurable default silently changes meaning when the default
+    # does, and this one did when the rat hole grew.
     caliper = synthetic_caliper(40.0, inch_to_m(8.5))
     solver, schedule, length, v_casing, v_annulus, shoe = build(
-        caliper, n_axial=30, top_depth=0.0)
+        caliper, n_axial=30, top_depth=0.0, rat_hole_length=2.0)
     result = solver.run(t_end=schedule.total_time, n_snapshots=0)
     return result, schedule, v_casing
 
@@ -146,22 +149,45 @@ def test_arrival_is_earlier_deeper(short_job):
 
 
 def test_thresholds_arrive_in_order(short_job):
-    """0.1 before 0.5 before 0.9 - otherwise the mixing zone is meaningless.
-
-    Each contour is masked separately: displacement efficiency is below one, so
-    there are depths the 0.5 contour reaches and the 0.9 contour never does.
-    That is a result about the job, not a gap to paper over - it means those
-    depths end the job still holding more than 10 % mud.
-    """
+    """0.1 before 0.5 before 0.9 - otherwise the mixing zone is meaningless."""
     report = short_job[0].arrival
     low, mid, high = (report.at(t) for t in (0.1, 0.5, 0.9))
     both = np.isfinite(low) & np.isfinite(mid)
-    assert np.any(both) and np.all(low[both] <= mid[both])
+    assert np.any(both), "the front should have reached somewhere"
+    assert np.all(low[both] <= mid[both])
+    # Whether the 0.9 contour reaches anywhere depends on the well, so only the
+    # ordering is asserted here; the masking itself is pinned on fabricated
+    # fractions below.
     both = np.isfinite(mid) & np.isfinite(high)
-    assert np.any(both) and np.all(mid[both] <= high[both])
+    assert np.all(mid[both] <= high[both])
     width = report.mixing_zone_duration()
     assert np.all(width[np.isfinite(width)] >= 0.0)
-    assert np.any(np.isnan(high)), "this well should not be fully displaced"
+
+
+def test_a_contour_a_depth_never_reaches_stays_missing():
+    """Each threshold is masked on its own, and that is a result to keep.
+
+    Displacement efficiency is below one on a real job, so there are depths the
+    0.5 contour reaches and the 0.9 contour never does: those end the job still
+    holding more than 10 % mud.  Filling them in - with the job time, or by
+    borrowing the 0.5 crossing - would report a clean annulus where there is a
+    dirty one.
+
+    Pinned on fabricated fractions rather than on a solver run: whether a
+    particular well happens to finish fully displaced depends on its geometry,
+    and an earlier version of this check broke the moment the rat hole
+    shortened the cased interval.
+    """
+    tracker = ArrivalTracker(_Stations(2), fluid_index=1)
+    tracker.update(0.0, _fractions([0.0, 0.0]))
+    tracker.update(1.0, _fractions([0.3, 0.3]))    # both pass 0.1
+    tracker.update(2.0, _fractions([0.95, 0.6]))   # one stalls short of 0.9
+    report = tracker.report(2.0)
+    low, mid, high = (report.at(t) for t in (0.1, 0.5, 0.9))
+    assert np.all(np.isfinite(low)) and np.all(np.isfinite(mid))
+    assert np.all(low < mid)                        # and strictly in order
+    assert np.isnan(high).sum() == 1
+    assert np.isnan(report.mixing_zone_duration()).sum() == 1
 
 
 def test_rising_time_is_the_shoe_to_top_travel(short_job):

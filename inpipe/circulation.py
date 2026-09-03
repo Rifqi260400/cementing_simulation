@@ -143,6 +143,9 @@ class CirculationResult:
     #: the job is a result in its own right - it is cement that never got in.
     rathole_fractions: np.ndarray | None = None
     rathole_volume: float = 0.0
+    #: Depths the rat hole spans [m]: the shoe, and the bottom of the hole.
+    rathole_top: float = 0.0
+    rathole_bottom: float = 0.0
 
     def yield_diagnostic(self, fluid) -> dict:
         """Where the annular wall shear falls below ``fluid``'s yield stress.
@@ -541,6 +544,7 @@ class CirculationSolver:
                 time=self.t,
                 casing=self.f_casing.copy(),
                 annulus=self.f_annulus.copy(),
+                rathole=self.f_rathole.copy(),
             ))
 
     def _annular_efficiency(self, cement_index):
@@ -628,4 +632,6 @@ class CirculationSolver:
             arrival=None if tracker is None else tracker.report(self.t),
             rathole_fractions=self.f_rathole.copy(),
             rathole_volume=self.rat_hole_volume,
+            rathole_top=self.well.shoe_depth,
+            rathole_bottom=self.well.total_depth,
         )

@@ -1,6 +1,6 @@
 {
   "name": "K-GEP-1 cementing job",
-  "notes": "Fluid properties for the field case. These are placeholders until the real mud and slurry data are available - change any number here and rerun; nothing in the code needs editing. The drilling fluid is currently a light water-based mud; set tau0 to 0 and k to 1e-3 with n = 1 to make it water. rat_hole_length is the open hole below the casing shoe, in metres: the casing does not land on bottom, and that gap is where cement turns around on its way up. 5 m is an assumption - replace it with the real shoe depth when known.",
+  "notes": "Fluid properties for the field case. These are placeholders until the real mud and slurry data are available - change any number here and rerun; nothing in the code needs editing. The drilling fluid is currently a light water-based mud; set tau0 to 0 and k to 1e-3 with n = 1 to make it water. rat_hole_length is the open hole below the casing shoe, in metres: the casing does not land on bottom, and that gap is where cement turns around on its way up. 10 m is an assumption - replace it with the real shoe depth when known.",
   "fluids": {
     "displaced": {
       "name": "mud",
@@ -21,7 +21,7 @@
     "casing_id": 0.1570736,
     "casing_od": 0.1778,
     "top_depth": 175.0,
-    "rat_hole_length": 5.0
+    "rat_hole_length": 10.0
   },
   "flow": {
     "flow_rate": 0.013248941244,

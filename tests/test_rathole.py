@@ -134,3 +134,52 @@ def test_the_volumetric_curve_still_carries_the_rat_hole(ratted_job):
     _, result, _ = ratted_job
     report = result.arrival
     assert np.all(report.volumetric > report.rat_hole_delay)
+
+
+# --- it has to be visible, not just present --------------------------------
+
+
+def test_the_section_image_draws_the_rat_hole(ratted_job):
+    """A picture that stops at the shoe is misleading, not merely incomplete.
+
+    The rat hole is the space the cement turns around in, so leaving it out
+    shows cement appearing in the annulus from nowhere.  It must be drawn below
+    the shoe, at the full hole width - there is no casing down there.
+    """
+    from inpipe.wellview import well_section_image
+
+    _, result, _ = ratted_job
+    img, extent = well_section_image(result, len(result.fluids) - 1)
+    z_min, z_max = extent[3], extent[2]
+    assert z_max == pytest.approx(result.rathole_bottom, abs=0.5)
+    assert result.rathole_bottom > result.rathole_top
+
+    # The bottom row is fluid across a width wider than the casing bore, since
+    # the rat hole is full bore.
+    bottom = img[-1]
+    filled = np.isfinite(bottom)
+    assert filled.sum() > 0
+    x = np.linspace(extent[0], extent[1], bottom.size)
+    assert np.abs(x[filled]).max() > 0.5 * result.annulus_grid.casing_od
+
+    # And it carries the rat hole's own composition, not the annulus's.
+    assert np.allclose(bottom[filled], result.rathole_fractions[-1])
+
+
+def test_snapshots_carry_the_rat_hole_for_the_animation(ratted_job):
+    """The video steps through snapshots, so they need it too.
+
+    Without it every frame would fall back to the final composition and the rat
+    hole would appear already cemented from the first frame.
+    """
+    from cases.circulation import build
+
+    caliper = synthetic_caliper(60.0, inch_to_m(8.5))
+    solver, schedule, *_ = build(caliper, n_axial=20, top_depth=0.0,
+                                 rat_hole_length=5.0)
+    result = solver.run(t_end=schedule.total_time, n_snapshots=6)
+    assert all("rathole" in snap for snap in result.snapshots)
+    first = result.snapshots[0]["rathole"]
+    last = result.snapshots[-1]["rathole"]
+    assert first[0] == pytest.approx(1.0)        # starts full of mud
+    assert last[-1] > first[-1]                  # and takes cement as it runs

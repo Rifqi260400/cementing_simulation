@@ -31,7 +31,8 @@ def _configure_ffmpeg():
         pass
 
 
-def well_section_image(result, fluid_index, casing_f=None, annulus_f=None, n_x=420):
+def well_section_image(result, fluid_index, casing_f=None, annulus_f=None, n_x=420,
+                       rathole_f=None):
     """Rasterise one instant of the well onto an ``(n_depth, n_x)`` image.
 
     Returns ``(image, extent)``.  ``image`` holds the volume fraction of the
@@ -39,12 +40,18 @@ def well_section_image(result, fluid_index, casing_f=None, annulus_f=None, n_x=4
     formation, so those can be painted separately.  ``extent`` is
     ``(x_min, x_max, z_max, z_min)`` for ``imshow`` with depth increasing down.
 
-    ``casing_f`` and ``annulus_f`` default to the final state; pass a snapshot's
-    arrays to render an earlier instant.
+    ``casing_f``, ``annulus_f`` and ``rathole_f`` default to the final state;
+    pass a snapshot's arrays to render an earlier instant.
+
+    The rat hole is drawn below the shoe at the full hole width, since there is
+    no casing in it.  Leaving it out was misleading rather than merely
+    incomplete: it is the space the cement turns around in, so a picture that
+    stops at the shoe shows the cement appearing in the annulus out of nowhere.
     """
     cg, ag = result.casing_grid, result.annulus_grid
     cf = result.casing_fractions if casing_f is None else casing_f
     af = result.annulus_fractions if annulus_f is None else annulus_f
+    rf = result.rathole_fractions if rathole_f is None else rathole_f
 
     r_ci = cg.radius
     r_co = 0.5 * ag.casing_od
@@ -52,9 +59,17 @@ def well_section_image(result, fluid_index, casing_f=None, annulus_f=None, n_x=4
     x = np.linspace(-r_hole_max, r_hole_max, n_x)
     ax_abs = np.abs(x)
 
-    # Depth axis: the casing grid's, with the annulus sampled onto it.
+    # Depth axis: the casing grid's, extended below the shoe over the rat hole.
     z = cg.z_centers
+    rat_rows = 0
+    if result.rathole_volume > 0.0 and rf is not None:
+        # Enough rows that a short rat hole still reads as a band, not a line.
+        rat_rows = max(8, int(round((result.rathole_bottom - result.rathole_top)
+                                    / cg.dz)))
+        z = np.concatenate([z, np.linspace(result.rathole_top,
+                                           result.rathole_bottom, rat_rows)])
     img = np.full((z.size, n_x), np.nan)
+    n_cased = cg.z_centers.size      # rows with casing in them; the rest is rat hole
 
     # --- casing bore: the centre-plane cut, f against the chord coordinate ---
     j = cg.n_azimuth // 2
@@ -66,7 +81,7 @@ def well_section_image(result, fluid_index, casing_f=None, annulus_f=None, n_x=4
     inside = ax_abs <= r_ci
     layer_of_x = np.clip(np.searchsorted(y_edges, x, side="right") - 1,
                          0, cg.n_layer - 1)
-    img[:, inside] = casing_plane[:, layer_of_x[inside]]
+    img[:n_cased, inside] = casing_plane[:, layer_of_x[inside]]
 
     # --- annulus: rings between the casing OD and the hole wall -------------
     # The annulus grid is in flow order (shoe first); put it on ascending depth
@@ -85,7 +100,7 @@ def well_section_image(result, fluid_index, casing_f=None, annulus_f=None, n_x=4
         faces_on_z[:, l] = np.interp(z, z_a, ring_faces[:, l])
     r_outer_on_z = np.interp(z, z_a, r_outer)
 
-    for k in range(z.size):
+    for k in range(n_cased):
         band = (ax_abs > r_co) & (ax_abs <= r_outer_on_z[k])
         if not band.any():
             continue
@@ -95,12 +110,19 @@ def well_section_image(result, fluid_index, casing_f=None, annulus_f=None, n_x=4
         )
         img[k, band] = ann_on_z[k, ring]
 
+    # --- rat hole: full bore, one well-mixed composition --------------------
+    if rat_rows:
+        hole = ag.caliper.diameter_at(z[n_cased:])
+        for k in range(n_cased, z.size):
+            img[k, ax_abs <= 0.5 * hole[k - n_cased]] = rf[fluid_index]
+
     extent = (-r_hole_max, r_hole_max, z[-1], z[0])
     return img, extent
 
 
 def plot_well_section(result, fluid_index=None, ax=None, casing_f=None,
-                      annulus_f=None, title=None, cmap="RdYlBu_r", colorbar=True):
+                      annulus_f=None, title=None, cmap="RdYlBu_r", colorbar=True,
+                      rathole_f=None):
     """Draw one instant of the well section."""
     import matplotlib
 
@@ -112,7 +134,8 @@ def plot_well_section(result, fluid_index=None, ax=None, casing_f=None,
     if ax is None:
         _, ax = plt.subplots(figsize=(4.2, 8.0))
 
-    img, extent = well_section_image(result, fluid_index, casing_f, annulus_f)
+    img, extent = well_section_image(result, fluid_index, casing_f, annulus_f,
+                                     rathole_f=rathole_f)
     ag = result.annulus_grid
 
     # Formation behind everything, then the steel, then the fluids on top.
@@ -121,7 +144,22 @@ def plot_well_section(result, fluid_index=None, ax=None, casing_f=None,
     order = np.argsort(ag.z_centers)
     r_out = np.interp(z, ag.z_centers[order], ag.r_outer[order])
     r_co = 0.5 * ag.casing_od
+    # Steel only down to the shoe - below it there is no casing, which is the
+    # whole point of the rat hole.
     ax.fill_betweenx(z, -r_co, r_co, color=STEEL_COLOR, zorder=1)
+
+    if result.rathole_volume > 0.0:
+        z_rat = np.linspace(result.rathole_top, result.rathole_bottom, 64)
+        r_rat = 0.5 * ag.caliper.diameter_at(z_rat)
+        ax.plot(r_rat, z_rat, color="0.25", lw=0.8, zorder=3)
+        ax.plot(-r_rat, z_rat, color="0.25", lw=0.8, zorder=3)
+        ax.axhline(result.rathole_top, color="0.25", lw=0.9, ls=":", zorder=4)
+        ax.text(0.98, result.rathole_top, "shoe  ", color="0.25", fontsize=7,
+                ha="right", va="bottom", transform=ax.get_yaxis_transform(),
+                zorder=5)
+        ax.text(0.98, result.rathole_bottom, "rat hole  ", color="0.25",
+                fontsize=7, ha="right", va="top",
+                transform=ax.get_yaxis_transform(), zorder=5)
 
     im = ax.imshow(img, extent=extent, cmap=cmap, vmin=0.0, vmax=1.0,
                    aspect="auto", interpolation="nearest", zorder=2)
@@ -179,7 +217,7 @@ def animate_circulation(result, path, fluid_index=None, fps=12, dpi=120,
     snap0 = result.snapshots[0]
     _, im = plot_well_section(result, fluid_index, ax=ax_sec,
                               casing_f=snap0["casing"], annulus_f=snap0["annulus"],
-                              cmap=cmap)
+                              rathole_f=snap0.get("rathole"), cmap=cmap)
 
     cg, ag = result.casing_grid, result.annulus_grid
     order = np.argsort(ag.z_centers)
@@ -215,7 +253,8 @@ def animate_circulation(result, path, fluid_index=None, fps=12, dpi=120,
     def update(i):
         snap = result.snapshots[i]
         img, _ = well_section_image(result, fluid_index,
-                                    snap["casing"], snap["annulus"])
+                                    snap["casing"], snap["annulus"],
+                                    rathole_f=snap.get("rathole"))
         im.set_data(img)
         ax_sec.set_title(f"{name}   t = {snap['time'] / 60:.1f} min")
         if ax_prof is not None:
