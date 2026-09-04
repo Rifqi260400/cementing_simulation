@@ -156,38 +156,56 @@ contours; this model has the whole field, so the actual cement volume in the
 swept region is used, which does not assume the region behind the back edge is
 clean.
 
-### Buoyancy: the one gap ANSYS will see and this model cannot
+### Gravity: three paths, two of them in the model
 
-Density enters the hydrostatic head here but never drives the flow — there is
-no momentum equation for it to act in. ANSYS has it the moment gravity is
-switched on. That is not a detail on this well:
+**1. Axial, at well scale — in the model.** Density sets each column's
+hydrostatic head, so a casing full of cement pulls harder than an annulus full
+of mud. That is the U-tube imbalance and free-fall margin, **21.8 bar** here.
+Reported, not fed back (assumption A-45).
 
-| leg | u [m/s] | `V_b = √(g'h)` | Fr | stratification |
-|---|---|---|---|---|
-| annulus | 0.277 | **0.709** | **0.39** | stable — cement below the mud it lifts |
-| casing | 0.684 | **0.821** | **0.83** | unstable — cement above, both going down |
+**2. Transverse, across the section — in the model, and correctly inert here.**
+Dai et al. drive segregation and instability-mixing from
+`v_t = √(At·g·sin β·D)` (their Eq. 4), implemented in `inpipe/segregation.py`.
+`β` is measured *from vertical*:
 
-`Fr < 1` in both legs: **buoyancy is stronger than the imposed flow**, and it
-has time to act — a blob crosses the annular gap in 0.17 s, some 6800 times
-during the job. In the annulus it is **2.5× the imposed flow**.
+| well | sin β | `v_t` [m/s] | segregation |
+|---|---|---|---|
+| **vertical — yours** | 0.000 | **0.000** | **inert** |
+| 30° deviated | 0.500 | 0.306 | active (Re_t 205) |
+| horizontal — Xue et al. | 1.000 | 0.433 | active (Re_t 290) |
 
-The two legs are in opposite regimes and both bias the same way. In the annulus
-a cement finger running into the mud is heavier than its surroundings, so
-buoyancy pulls it back and flattens the interface — a mechanism this model does
-not have. In the casing cement sits on the mud and buoyancy runs it ahead, the
-same direction free-fall already pushes.
+Zero for a vertical well **by geometry, not approximation** — gravity has no
+component across a horizontal cross-section. The vertical results are unchanged
+with it wired in; it earns its place by making a deviated section modellable
+with no new physics.
 
-> **Falsifiable prediction for the validation:** ANSYS should show a **shorter
-> interface, higher efficiency and earlier arrival** than this model. If it
-> shows a *longer* interface, something other than buoyancy is wrong and worth
-> hunting.
+**3. Axial, within the section — in neither this model nor either paper.**
+Gravity is axial and the composition gradient across the gap is transverse, so
+buoyancy cannot segregate. But the front is not flat: the fast core runs ahead,
+so inside the mixing zone the core is cement-rich and the wall mud-rich. The
+dense core carries a larger body force than the light wall and is retarded
+relative to it — **flattening the front**.
 
-**No drift-flux closure was added on purpose.** It needs a coefficient nothing
-here constrains, and a mis-calibrated buoyancy model is harder to spot than an
-absent one — it moves the answer the right way for the wrong reason. The sound
-order is to let the CFD measure the effect on the matched case and calibrate
-against it. That makes the validation runs improve this model rather than only
-grade it.
+| | |
+|---|---|
+| differential body force, cement vs mud | **6590 Pa/m** |
+| frictional gradient driving the flow | 748 Pa/m |
+| ratio | **8.8×** |
+
+Not a correction — dominant *within the mixing zone*. ANSYS captures it; this
+model has no mechanism for it, since one profile is solved per station from the
+mixture rheology.
+
+> **Expected disagreement:** the CFD should show a **shorter interface and
+> higher efficiency**. Arrival time should be much closer, being set by volume
+> balance.
+
+> **Correction to an earlier claim in this README.** It previously reported a
+> transverse buoyancy velocity of 0.709 m/s against an imposed 0.277 — 2.5× the
+> flow — for this vertical well. That used the full `g` across the gap, a
+> horizontal-well formula. Dai et al.'s `sin β` is the missing factor and the
+> transverse buoyancy here is zero. A test now pins it so the old form cannot
+> return.
 
 ### What this model cannot represent, measured
 

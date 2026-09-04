@@ -264,28 +264,30 @@ def main(argv=None) -> None:
     for reg in regime_from_result(result, flow_rate, solver.numerics):
         print(reg.summary())
 
-    # --- buoyancy: present in ANSYS, absent here (assumption A-29) ----------
-    from inpipe.buoyancy import buoyancy_scales
+    # --- gravity: three paths, two of them in the model --------------------
+    from inpipe.segregation import atwood, inertial_velocity
 
-    print("\n--- buoyancy (NOT modelled here; ANSYS has it) ---")
-    ag = result.annulus_grid
-    gap = float(np.mean(2.0 * (ag.r_outer - ag.r_inner)))
-    area_a = float(np.mean(ag.cell_volume.sum(axis=(1, 2)) / ag.dz))
-    scales = [
-        # Annulus: cement rises beneath the mud - dense fluid below, stable.
-        buoyancy_scales("annulus", spec.displacing.rho, spec.displaced.rho,
-                        flow_rate / area_a,
-                        gap, stable=True, gravity=solver.gravity),
-        # Casing: cement sits on the mud and both go down - dense above, unstable.
-        buoyancy_scales("casing", spec.displacing.rho, spec.displaced.rho,
-                        flow_rate / (math.pi * (0.5 * casing_id) ** 2),
-                        casing_id, stable=False, gravity=solver.gravity),
-    ]
-    for sc in scales:
-        print(sc.summary())
-    print(f"          a blob crosses the annular gap under buoyancy in "
-          f"{scales[0].crossing_time:.2f} s, about "
-          f"{result.time / scales[0].crossing_time:.0f} times over this job")
+    print("\n--- gravity ---")
+    beta = solver.well.inclination
+    at = atwood(max(spec.displacing.rho, spec.displaced.rho),
+                min(spec.displacing.rho, spec.displaced.rho))
+    ag0 = solver.annulus_grid
+    d_eq = float(np.mean(2.0 * (ag0.r_outer - ag0.r_inner)))
+    v_t = inertial_velocity(at, d_eq, beta, solver.gravity)
+    print(f"axial, well scale : U-tube {h['utube_imbalance'].max() / 1e5:.2f} bar peak - "
+          "in the model as hydrostatic head; reported, not fed back (A-45)")
+    print(f"transverse        : Dai et al. Eq. 4, v_t = sqrt(At g sin(beta) D) = "
+          f"{v_t:.3f} m/s at beta = {math.degrees(beta):.0f} deg from vertical")
+    if v_t <= 0.0:
+        print("                    zero in a vertical well, so their segregation and "
+              "mixing are inert here - by geometry, not approximation")
+    else:
+        print("                    segregation and instability mixing ACTIVE "
+              "(inpipe/segregation.py)")
+    print("axial, in-section : NOT in this model nor in either paper - the dense "
+          "core is retarded")
+    print("                    relative to the light wall, flattening the front; "
+          "see inpipe/buoyancy.py")
 
     print("\n--- displacement quality (Xue et al. 2022) ---")
     ld = np.asarray(h["interface_length"], dtype=float)

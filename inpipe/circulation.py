@@ -42,6 +42,11 @@ from .fluid import Fluid, PumpSchedule, mix_fluids
 from .grid import Grid
 from .displacement import interface_metrics
 from .regime import reynolds
+from .segregation import (
+    cross_section_regime,
+    mix_uniformly,
+    segregate,
+)
 from .timing import ArrivalTracker
 from .hydraulics import HydraulicsReport, circulation_pressure
 from .slot import SlotProfile, solve_slot_tau_w
@@ -428,6 +433,8 @@ class CirculationSolver:
             face_area=ag.face_area, cell_volume=ag.cell_volume,
         )
 
+        self._gravity_rearrangement()
+
         self.t += dt
         self.n_steps += 1
         # Cumulative volume of the displacing fluid pumped in at the inlet.
@@ -436,6 +443,51 @@ class CirculationSolver:
         self.pumped_displacing += q * float(casing_inlet[-1]) * dt
         self._last = dict(q=q, u_c=u_c, u_a=u_a, profiles=profiles, shoe=shoe, dt=dt)
         return dt
+
+    def _gravity_rearrangement(self):
+        """Cross-section mixing and density segregation, Dai et al. Appendix A.3.
+
+        Their two gravity mechanisms both run on the inertial velocity
+        ``v_t = sqrt(At g sin(beta) D)``, which is **zero in a vertical well**:
+        gravity has no component across the section to stratify it.  So this is
+        skipped outright at ``beta = 0`` - by geometry, not by approximation -
+        and the loop below never runs on the K-GEP-1 case.  It is here because
+        it is part of the paper being replicated and it is what makes a
+        deviated section modellable with no new physics.
+        """
+        if self.well.inclination <= 0.0:
+            return
+
+        q = self._last["q"] if getattr(self, "_last", None) else 0.0
+        if q <= 0.0:
+            return
+        beta = self.well.inclination
+        displacing, displaced = self.fluids[-1], self.fluids[0]
+
+        for leg, fields, grid, stable in (
+            # The annulus lifts cement under mud: dense fluid below, stable.
+            ("annulus", self.f_annulus, self.annulus_grid,
+             displacing.rho > displaced.rho),
+            # The casing drops cement onto mud: dense fluid above, unstable.
+            ("casing", self.f_casing, self.casing_grid,
+             displacing.rho < displaced.rho),
+        ):
+            volume = (grid.cell_volume if np.ndim(grid.cell_volume) == 3
+                      else np.broadcast_to(grid.cell_volume,
+                                           (grid.n_axial,) + grid.cell_volume.shape))
+            for k in range(grid.n_axial):
+                vol_k = volume[k]
+                area = float(vol_k.sum()) / grid.dz
+                if area <= 0.0:
+                    continue
+                diameter = math.sqrt(4.0 * area / math.pi)
+                reg = cross_section_regime(displacing, displaced, q / area,
+                                           diameter, beta, stable, self.gravity)
+                if reg.mixes:
+                    fields[:, k] = mix_uniformly(fields[:, k], vol_k)
+                elif reg.segregates:
+                    fields[:, k] = segregate(fields[:, k], vol_k,
+                                             [f.rho for f in self.fluids])
 
     def _reynolds(self):
         """Largest Reynolds number in each leg right now [-].
