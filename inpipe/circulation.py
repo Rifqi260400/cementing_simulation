@@ -40,6 +40,8 @@ from .caliper import CaliperLog
 from .config import G_ACCEL, GridConfig, NumericsConfig
 from .fluid import Fluid, PumpSchedule, mix_fluids
 from .grid import Grid
+from .displacement import interface_metrics
+from .regime import reynolds
 from .timing import ArrivalTracker
 from .hydraulics import HydraulicsReport, circulation_pressure
 from .slot import SlotProfile, solve_slot_tau_w
@@ -264,6 +266,9 @@ class CirculationSolver:
             "time", "shoe_fraction", "returns_fraction", "annular_efficiency",
             "pump_pressure", "shoe_pressure", "ecd_at_shoe", "utube_imbalance",
             "mass_error", "sum_to_one_error", "dt",
+            "reynolds_casing", "reynolds_annulus",
+            "interface_front", "interface_back", "interface_length",
+            "swept_efficiency",
         )}
         self._snapshots: list = []
 
@@ -432,6 +437,48 @@ class CirculationSolver:
         self._last = dict(q=q, u_c=u_c, u_a=u_a, profiles=profiles, shoe=shoe, dt=dt)
         return dt
 
+    def _reynolds(self):
+        """Largest Reynolds number in each leg right now [-].
+
+        Recorded through the job rather than read off the end: at the end the
+        annulus is full of cement and reads laminar; the mud it started with is
+        what decides whether the laminar profile this solver integrates was
+        ever the right one (see :mod:`inpipe.regime`).
+        """
+        last = getattr(self, "_last", None)
+        if last is None:
+            return float("nan"), float("nan")
+        q = last["q"]
+        cg, ag = self.casing_grid, self.annulus_grid
+
+        # The annulus carries its wall stress on the profiles already; the
+        # casing does not, so it is re-solved here - once per distinct rounded
+        # mixture, not once per station.
+        from .velocity import solve_tau_w
+
+        cp = self._effective(self.f_casing, cg.cell_volume, self._params)
+        gc = self.numerics.regularisation_shear_rate
+        d0, d1, d2 = self.numerics.cache_key_decimals
+        tau_c = np.empty(cg.n_axial)
+        cache: dict = {}
+        for k in range(cg.n_axial):
+            rho, tau0, kk, n = cp[k]
+            key = (round(float(tau0), d0), round(float(kk), d1), round(float(n), d2))
+            if key not in cache:
+                cache[key] = solve_tau_w(
+                    q, Fluid("eff", float(rho), float(tau0), float(kk), float(n)),
+                    cg.radius, gammadot_c=gc) if q > 0.0 else 0.0
+            tau_c[k] = cache[key]
+        re_c, _ = reynolds(cp[:, 0], q / float(cg.cell_area.sum()),
+                           2.0 * cg.radius, tau_c, cp[:, 1], cp[:, 2], cp[:, 3])
+
+        ap = self._effective(self.f_annulus, ag.cell_volume, self._params)
+        area = ag.cell_volume.sum(axis=(1, 2)) / ag.dz
+        tau_a = np.array([p.tau_w for p in last["profiles"]])
+        re_a, _ = reynolds(ap[:, 0], q / area, 2.0 * (ag.r_outer - ag.r_inner),
+                           tau_a, ap[:, 1], ap[:, 2], ap[:, 3])
+        return float(np.max(re_c)), float(np.max(re_a))
+
     def _shoe_mixing_cup(self, u_c):
         """Flux-weighted composition leaving the casing at the shoe."""
         w = np.maximum(u_c[-1], 0.0) * self.casing_grid.cell_area
@@ -539,6 +586,23 @@ class CirculationSolver:
         ))
         h["mass_error"].append(self._total_volume_error())
         h["dt"].append(getattr(self, "_last", {}).get("dt", float("nan")))
+        re_c, re_a = self._reynolds()
+        h["reynolds_casing"].append(re_c)
+        h["reynolds_annulus"].append(re_a)
+
+        # Interface length and swept efficiency: the global efficiency above is
+        # a straight ramp until breakthrough and says nothing while it runs
+        # (see inpipe/displacement.py).
+        ag = self.annulus_grid
+        station = ag.cell_volume.sum(axis=(1, 2))
+        metrics = interface_metrics(
+            np.einsum("klm,klm->k", self.f_annulus[cem], ag.cell_volume) / station,
+            station, ag.z_centers,
+        )
+        h["interface_front"].append(metrics.front_depth)
+        h["interface_back"].append(metrics.back_depth)
+        h["interface_length"].append(metrics.length)
+        h["swept_efficiency"].append(metrics.swept_efficiency)
         if snapshot:
             self._snapshots.append(dict(
                 time=self.t,

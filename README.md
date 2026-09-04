@@ -99,6 +99,54 @@ non-UTF8 bytes in a curve description — all handled. Its units come from the
 bottoming out, not geometry. `implausible_tail` finds it; the case cuts it and
 says so. Nothing is trimmed silently — `--keep-tail` leaves it in.
 
+### Is a laminar profile defensible? — and two better efficiency measures
+
+```bash
+.venv/bin/python -m cases.circulation    # both reported in the run output
+```
+
+Xue et al. (2022), *J. Pet. Sci. Eng.* **208**:109393, simulate an eccentric
+horizontal annulus in Fluent and make two points that land on this model.
+
+**1. Regime.** They find the wide side turbulent while the narrow side is still
+laminar, and warn that assuming one regime everywhere causes "serious model
+error". This solver integrates a **laminar** Herschel–Bulkley profile
+everywhere. Whether that holds depends entirely on the mud, which is not yet
+measured:
+
+| mud | peak Re, casing | peak Re, annulus | regime |
+|---|---|---|---|
+| placeholder (`τ₀` 2 Pa, `k` 0.30, `n` 0.72) | 875 | 1305 | laminar — profile sound |
+| **taken as water (1 cP)** | **107 000** | **40 800** | **fully turbulent** |
+
+So if the mud really is as thin as water, the profile this model solves is the
+wrong one. `inpipe/regime.py` computes `Re = ρVD_h/μ_eff` with
+`μ_eff = τ_w/γ̇(τ_w)` from the solver's own constitutive law, tracks it at every
+diagnostic step — the *start* of the job, when the annulus is still all mud, is
+the dangerous moment, not the end — and says so in the run output. The regime
+is **reported, not modelled**: a turbulence model is a different solver, and
+running a laminar profile at Re = 10⁵ silently is worse than either.
+
+**2. The efficiency curve is nearly information-free while the job runs.**
+Before breakthrough, `η = V_cement/V_annulus` is just pumped volume over
+annulus volume — a straight ramp identical for every rheology, rate and
+geometry. All the physics appears only as a shift in arrival time. Their two
+replacements are now recorded and plotted:
+
+| | K-GEP-1 |
+|---|---|
+| interface length (20 %–80 % contours) | peaks at **108.3 m**, ends at 25.7 m |
+| swept efficiency (behind the front) | **0.205 → 0.895** |
+| global efficiency | 0 → 0.895, straight ramp |
+
+An interface stretched over 108 m of a 202 m annulus is the headline: more than
+half the well is in the mixing zone at once. One deviation from their
+definition — they take the ratio of the volume behind the 80 % contour to that
+behind the 20 % one, being what a CFD post-processor can extract from two
+contours; this model has the whole field, so the actual cement volume in the
+swept region is used, which does not assume the region behind the back edge is
+clean.
+
 ### Rising time
 
 ```bash

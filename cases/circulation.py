@@ -248,6 +248,33 @@ def main(argv=None) -> None:
     print(f"annular displacement efficiency: "
           f"{result.annular_displacement_efficiency(i_cem):.4f}")
 
+    # --- flow regime: is a laminar profile defensible on this job? ----------
+    from inpipe.regime import LAMINAR_LIMIT, TURBULENT_LIMIT, regime_from_result
+
+    print("\n--- flow regime (the solver integrates a LAMINAR profile) ---")
+    re_c = np.nanmax(h["reynolds_casing"])
+    re_a = np.nanmax(h["reynolds_annulus"])
+    print(f"peak Reynolds over the job: casing {re_c:.0f}, annulus {re_a:.0f} "
+          f"(laminar below {LAMINAR_LIMIT:.0f}, turbulent above {TURBULENT_LIMIT:.0f})")
+    if max(re_c, re_a) >= LAMINAR_LIMIT:
+        print("  *** the flow leaves the laminar range during this job - the "
+              "velocity profile this model solves does not apply there")
+    else:
+        print("  laminar throughout, so the solved profile holds")
+    for reg in regime_from_result(result, flow_rate, solver.numerics):
+        print(reg.summary())
+
+    print("\n--- displacement quality (Xue et al. 2022) ---")
+    ld = np.asarray(h["interface_length"], dtype=float)
+    sw = np.asarray(h["swept_efficiency"], dtype=float)
+    good = np.isfinite(ld)
+    if good.any():
+        print(f"interface length (20-80 % contours): peaks at {np.nanmax(ld):.1f} m, "
+              f"ends at {ld[good][-1]:.1f} m")
+        print(f"swept efficiency  : {np.nanmin(sw):.3f} -> {sw[np.isfinite(sw)][-1]:.3f}"
+              "   (the global figure below is a straight ramp until breakthrough "
+              "and says little while the job runs)")
+
     if result.rathole_volume > 0.0:
         left = result.rathole_fractions[0] * result.rathole_volume
         print(f"rat hole at end  : {100 * result.rathole_fractions[i_cem]:.2f} % cement, "
@@ -350,10 +377,21 @@ def main(argv=None) -> None:
     axes[1].set_xlabel("local cement fraction")
     axes[1].grid(alpha=0.3)
 
-    axes[2].plot(h["time"] / 60, h["annular_efficiency"])
+    # Global efficiency is a straight ramp until breakthrough, so the swept
+    # efficiency and the interface length are plotted with it: those two say
+    # something while the job is still running (Xue et al. 2022).
+    axes[2].plot(h["time"] / 60, h["annular_efficiency"], label="global (all annulus)")
+    axes[2].plot(h["time"] / 60, h["swept_efficiency"], lw=1.6,
+                 label="swept (behind the front)")
     axes[2].set_xlabel("time [min]")
-    axes[2].set_ylabel("annular displacement efficiency")
+    axes[2].set_ylabel("displacement efficiency")
+    axes[2].set_ylim(-0.03, 1.03)
+    axes[2].legend(fontsize=7, loc="lower right")
     axes[2].grid(alpha=0.3)
+    twin = axes[2].twinx()
+    twin.plot(h["time"] / 60, h["interface_length"], color="C3", ls=":", lw=1.3)
+    twin.set_ylabel("interface length, 20-80 % [m]", color="C3", fontsize=8)
+    twin.tick_params(axis="y", labelcolor="C3", labelsize=7)
 
     axes[3].plot(h["time"] / 60, h["pump_pressure"] / 1e5, label="pump pressure")
     axes[3].plot(h["time"] / 60, h["utube_imbalance"] / 1e5, label="U-tube imbalance")
