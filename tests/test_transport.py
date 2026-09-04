@@ -283,6 +283,21 @@ def test_numerical_diffusion_is_measured_and_falls_with_dx(n_axial, capsys):
 
     Reported against both the paper's scale estimate ``dx^2/dt`` and the
     modified-equation value ``u dz (1 - C) / 2`` for upwind + explicit Euler.
+
+    What to compare it against is the subtle part, and an earlier version of
+    this test got it wrong: it printed a ratio to a "physical Dm ~ 1e-3 m^2/s",
+    a number with no justification behind it.  The physical diffusivity here is
+    **molecular**, ~1e-9 m^2/s, against which the numerical value is some four
+    orders of magnitude larger - and Taylor-Aris dispersion, which would raise
+    it, is not established: it needs a radial mixing time ``R^2/Dm`` of about
+    22 days and the job lasts minutes.
+
+    The mechanism that actually spreads the front in this regime is **shear** -
+    the velocity profile, which the model does represent.  So the honest
+    comparison is numerical smearing against that, and on the field case it is
+    12.6 m of front width against a measured interface length of 108 m: 12 % in
+    length, 1.3 % in variance.  Subdominant, which is the right conclusion, but
+    it was reached the wrong way before.
     """
     grid, prof, u3 = build_stretching_case(n_axial=n_axial)
     z0 = 1.0
@@ -307,7 +322,9 @@ def test_numerical_diffusion_is_measured_and_falls_with_dx(n_axial, capsys):
             f"\n    Dm_num (paper, dx^2/dt)     = {d_paper:.4e} m^2/s"
             f"\n    Dm_num (upwind mod. eqn.)   = {d_theory:.4e} m^2/s"
             f"\n    Dm_num (fitted from front)  = {d_fit:.4e} m^2/s"
-            f"\n    ratio to physical Dm ~ 1e-3 = {d_fit / 1e-3:.3g}"
+            f"\n    vs molecular Dm ~ 1e-9      = {d_fit / 1e-9:.3g} x larger"
+            f"\n    (the physical spreading here is shear, not diffusion - see "
+            f"the docstring)"
         )
     assert d_fit == pytest.approx(d_theory, rel=0.25)
 

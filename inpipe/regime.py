@@ -60,7 +60,11 @@ import numpy as np
 from .rheology import shear_rate
 
 __all__ = ["FlowRegime", "regime_from_result", "reynolds", "LAMINAR_LIMIT",
-           "TURBULENT_LIMIT"]
+           "TURBULENT_LIMIT", "ENTRANCE_COEFFICIENT"]
+
+#: Laminar entrance length ``L_e = C Re D_h``.  The textbook coefficient for a
+#: pipe; an annulus develops in a similar distance.  [OUR CHOICE, A-52]
+ENTRANCE_COEFFICIENT = 0.05
 
 #: Below this the flow is laminar, above ``TURBULENT_LIMIT`` fully turbulent,
 #: between them transitional.  The usual pipe values; for a non-Newtonian fluid
@@ -94,6 +98,38 @@ class FlowRegime:
         return ~self.laminar & ~self.turbulent
 
     @property
+    def entrance_length(self) -> np.ndarray:
+        """Distance the flow needs to develop a profile [m]."""
+        return ENTRANCE_COEFFICIENT * self.reynolds * self.hydraulic_diameter
+
+    @property
+    def geometry_length(self) -> np.ndarray:
+        """Distance over which the passage itself changes size [m].
+
+        ``|D_h / (dD_h/dz)|``: small wherever the caliper steps.
+        """
+        if self.depth.size < 2:
+            return np.full(self.depth.shape, np.inf)
+        grad = np.gradient(self.hydraulic_diameter, self.depth)
+        return np.divide(np.abs(self.hydraulic_diameter), np.abs(grad),
+                         out=np.full(grad.shape, np.inf), where=grad != 0.0)
+
+    @property
+    def developing(self) -> np.ndarray:
+        """Where the flow cannot develop before the geometry moves on.
+
+        The velocity profile this model solves is the **fully developed** one,
+        computed from the local gap as though the passage went on forever.
+        Where ``L_e > L_geom`` that is not true: the flow is still adjusting to
+        the last change in section when the next one arrives.  This is the
+        reduced-order approach's structural limit, not a bug - representing it
+        needs a momentum equation, which is what the CFD comparison is for -
+        and it marks exactly the depths where the two should be expected to
+        disagree.
+        """
+        return self.entrance_length > self.geometry_length
+
+    @property
     def is_defensible(self) -> bool:
         """True only if a laminar profile holds everywhere."""
         return bool(np.all(self.laminar))
@@ -117,6 +153,20 @@ class FlowRegime:
             )
             worst = int(np.argmax(self.reynolds))
             lines.append(f"          worst at {self.depth[worst]:.1f} m, Re {hi:.0f}")
+
+        dev = self.developing
+        if dev.size > 1:
+            frac = 100.0 * float(np.mean(dev))
+            lines.append(
+                f"          developed-profile assumption: L_e = {np.median(self.entrance_length):.2f} m "
+                f"(median) against a geometry that changes over "
+                f"{np.median(self.geometry_length):.2f} m"
+            )
+            if frac > 0.0:
+                lines.append(
+                    f"          *** {frac:.0f} % of stations cannot develop before the "
+                    "section changes - fully developed profiles are assumed there anyway"
+                )
         return "\n".join(lines)
 
 

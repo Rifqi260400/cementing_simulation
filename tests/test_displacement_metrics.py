@@ -169,3 +169,49 @@ def test_the_solver_records_the_metrics_through_the_job():
     # new measure is not telling us anything the old one did not.
     early = np.flatnonzero(live)[0]
     assert swept[early] > h["annular_efficiency"][early] + 0.05
+
+
+# --- the developed-profile assumption ---------------------------------------
+
+
+def _regime(depth, hydraulic_diameter, re):
+    from inpipe.regime import FlowRegime
+
+    n = len(depth)
+    return FlowRegime(leg="annulus", depth=np.asarray(depth, dtype=float),
+                      reynolds=np.full(n, float(re)), velocity=np.ones(n),
+                      effective_viscosity=np.ones(n),
+                      hydraulic_diameter=np.asarray(hydraulic_diameter, dtype=float))
+
+
+def test_a_smooth_passage_develops_and_a_stepped_one_does_not():
+    """The reduced-order model's structural limit, made visible.
+
+    It solves the *fully developed* profile from the local gap, as though the
+    passage went on forever.  Where the section changes faster than the flow
+    can adjust, that is not true - and on a real caliper with sharp washouts
+    that is a large fraction of the well.
+    """
+    depth = np.linspace(0.0, 100.0, 101)
+    smooth = _regime(depth, np.full(101, 0.09), re=400.0)
+    assert not smooth.developing.any()
+
+    stepped = np.full(101, 0.09)
+    stepped[40:45] = 0.30                      # a washout five cells wide
+    rough = _regime(depth, stepped, re=400.0)
+    assert rough.developing.any()
+    # Flagged at the edges of the step, where the section actually changes.
+    assert rough.developing[38:47].any()
+
+
+def test_entrance_length_scales_with_reynolds_and_gap():
+    slow = _regime(np.linspace(0, 10, 11), np.full(11, 0.09), re=100.0)
+    fast = _regime(np.linspace(0, 10, 11), np.full(11, 0.09), re=400.0)
+    assert np.all(fast.entrance_length == pytest.approx(4.0 * slow.entrance_length))
+    assert slow.entrance_length[0] == pytest.approx(0.05 * 100.0 * 0.09)
+
+
+def test_a_uniform_passage_has_infinite_geometry_length():
+    """No change in section means nothing to develop against."""
+    reg = _regime(np.linspace(0, 10, 11), np.full(11, 0.09), re=400.0)
+    assert np.all(np.isinf(reg.geometry_length))

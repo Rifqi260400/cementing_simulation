@@ -156,6 +156,37 @@ contours; this model has the whole field, so the actual cement volume in the
 swept region is used, which does not assume the region behind the back edge is
 clean.
 
+### What this model cannot represent, measured
+
+Two limits are structural to the reduced-order approach rather than defects of
+this implementation, and both are now measured on every run rather than left as
+prose.
+
+**Fully developed profiles.** The velocity profile is solved from the local gap
+as though the passage went on forever. The laminar entrance length
+`L_e = 0.05·Re·D_h` is **1.78 m** here, while the caliper changes the section
+over `|D_h/(dD_h/dz)|` of 2.98 m on median but as little as **0.14 m** at the
+sharpest steps. On the caliper at its own 1 cm sampling, **41 % of the interval
+cannot develop before the section changes**, and the ratio reaches 27 at the
+worst washout edges.
+
+The flagged fraction *rises* under mesh refinement — 0.0 % at 60 axial
+stations, 2.4 % at 125, 4.8 % at 250 — because a coarse grid hides the
+violation by smoothing away the hole it cannot resolve. Refining does not
+converge this assumption; it exposes it. **So aim the ANSYS comparison at the
+washout edges**, which is also where the flow separation in your contours comes
+from. The smooth majority of the well is where the reduced-order model is
+already trustworthy.
+
+**Numerical smearing.** Upwind advection gives `D_num = u·dz·(1−C)/2 = 0.106
+m²/s`, worth **12.6 m** of front width over the job. The physical diffusivity
+is molecular, ~1e-9 m²/s — four orders smaller — and Taylor–Aris dispersion is
+*not* established (it needs a radial mixing time of ~22 days against a job of
+minutes). The mechanism that really spreads the front is shear, which the model
+resolves: 12.6 m of numerical width against a measured interface length of
+**108 m** is 12 % in length and **1.3 % in variance**. Subdominant, but not
+zero.
+
 ### Rising time
 
 ```bash
