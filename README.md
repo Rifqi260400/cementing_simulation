@@ -156,6 +156,39 @@ contours; this model has the whole field, so the actual cement volume in the
 swept region is used, which does not assume the region behind the back edge is
 clean.
 
+### Buoyancy: the one gap ANSYS will see and this model cannot
+
+Density enters the hydrostatic head here but never drives the flow — there is
+no momentum equation for it to act in. ANSYS has it the moment gravity is
+switched on. That is not a detail on this well:
+
+| leg | u [m/s] | `V_b = √(g'h)` | Fr | stratification |
+|---|---|---|---|---|
+| annulus | 0.277 | **0.709** | **0.39** | stable — cement below the mud it lifts |
+| casing | 0.684 | **0.821** | **0.83** | unstable — cement above, both going down |
+
+`Fr < 1` in both legs: **buoyancy is stronger than the imposed flow**, and it
+has time to act — a blob crosses the annular gap in 0.17 s, some 6800 times
+during the job. In the annulus it is **2.5× the imposed flow**.
+
+The two legs are in opposite regimes and both bias the same way. In the annulus
+a cement finger running into the mud is heavier than its surroundings, so
+buoyancy pulls it back and flattens the interface — a mechanism this model does
+not have. In the casing cement sits on the mud and buoyancy runs it ahead, the
+same direction free-fall already pushes.
+
+> **Falsifiable prediction for the validation:** ANSYS should show a **shorter
+> interface, higher efficiency and earlier arrival** than this model. If it
+> shows a *longer* interface, something other than buoyancy is wrong and worth
+> hunting.
+
+**No drift-flux closure was added on purpose.** It needs a coefficient nothing
+here constrains, and a mis-calibrated buoyancy model is harder to spot than an
+absent one — it moves the answer the right way for the wrong reason. The sound
+order is to let the CFD measure the effect on the matched case and calibrate
+against it. That makes the validation runs improve this model rather than only
+grade it.
+
 ### What this model cannot represent, measured
 
 Two limits are structural to the reduced-order approach rather than defects of

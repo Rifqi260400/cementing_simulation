@@ -264,6 +264,29 @@ def main(argv=None) -> None:
     for reg in regime_from_result(result, flow_rate, solver.numerics):
         print(reg.summary())
 
+    # --- buoyancy: present in ANSYS, absent here (assumption A-29) ----------
+    from inpipe.buoyancy import buoyancy_scales
+
+    print("\n--- buoyancy (NOT modelled here; ANSYS has it) ---")
+    ag = result.annulus_grid
+    gap = float(np.mean(2.0 * (ag.r_outer - ag.r_inner)))
+    area_a = float(np.mean(ag.cell_volume.sum(axis=(1, 2)) / ag.dz))
+    scales = [
+        # Annulus: cement rises beneath the mud - dense fluid below, stable.
+        buoyancy_scales("annulus", spec.displacing.rho, spec.displaced.rho,
+                        flow_rate / area_a,
+                        gap, stable=True, gravity=solver.gravity),
+        # Casing: cement sits on the mud and both go down - dense above, unstable.
+        buoyancy_scales("casing", spec.displacing.rho, spec.displaced.rho,
+                        flow_rate / (math.pi * (0.5 * casing_id) ** 2),
+                        casing_id, stable=False, gravity=solver.gravity),
+    ]
+    for sc in scales:
+        print(sc.summary())
+    print(f"          a blob crosses the annular gap under buoyancy in "
+          f"{scales[0].crossing_time:.2f} s, about "
+          f"{result.time / scales[0].crossing_time:.0f} times over this job")
+
     print("\n--- displacement quality (Xue et al. 2022) ---")
     ld = np.asarray(h["interface_length"], dtype=float)
     sw = np.asarray(h["swept_efficiency"], dtype=float)

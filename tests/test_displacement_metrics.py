@@ -215,3 +215,49 @@ def test_a_uniform_passage_has_infinite_geometry_length():
     """No change in section means nothing to develop against."""
     reg = _regime(np.linspace(0, 10, 11), np.full(11, 0.09), re=400.0)
     assert np.all(np.isinf(reg.geometry_length))
+
+
+# --- buoyancy: the omission, quantified -------------------------------------
+
+
+def test_buoyancy_scales_on_this_well_outweigh_the_imposed_flow():
+    """The size of what the model leaves out, so it is not mistaken for small.
+
+    Density never drives the flow here (assumption A-29), but ANSYS has it the
+    moment gravity is on.  If the Froude number were large the omission would
+    be a correction; it is not.
+    """
+    from inpipe.buoyancy import buoyancy_scales
+
+    annulus = buoyancy_scales("annulus", 1870.0, 1198.0, velocity=0.437,
+                              gap=0.0872, stable=True)
+    assert annulus.froude < 1.0
+    assert annulus.buoyancy_velocity > annulus.velocity
+    # And it has time: many gap crossings during a job of minutes.
+    assert 12.41 * 60 / annulus.crossing_time > 1000
+
+
+def test_the_two_legs_are_in_opposite_stratifications():
+    """Annulus stable, casing unstable - and both bias the same way.
+
+    In the annulus cement is below the mud it pushes up, so buoyancy flattens
+    the interface; in the casing it sits on top going down, so buoyancy runs it
+    ahead.  Shorter interface, earlier arrival: the CFD should differ from this
+    model in a known direction, which is what makes the comparison a test.
+    """
+    from inpipe.buoyancy import buoyancy_scales
+
+    annulus = buoyancy_scales("annulus", 1870.0, 1198.0, 0.437, 0.0872, stable=True)
+    casing = buoyancy_scales("casing", 1870.0, 1198.0, 0.684, 0.157, stable=False)
+    assert annulus.stable and not casing.stable
+    assert "shorter interface" in annulus.summary()
+    assert "earlier arrival" in casing.summary()
+
+
+def test_no_density_difference_means_no_buoyancy():
+    from inpipe.buoyancy import buoyancy_scales
+
+    same = buoyancy_scales("annulus", 1500.0, 1500.0, 0.4, 0.09, stable=True)
+    assert same.buoyancy_velocity == 0.0
+    assert same.atwood == 0.0
+    assert np.isinf(same.froude)
