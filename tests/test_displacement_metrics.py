@@ -136,3 +136,36 @@ def test_reynolds_is_vectorised_over_stations():
                       np.array([5.0, 10.0, 20.0, 40.0]), 2.0, 0.3, 0.72)
     assert re.shape == (4,)
     assert np.all(np.diff(re) > 0.0)      # thinner at higher shear, so faster
+
+
+def test_the_solver_records_the_metrics_through_the_job():
+    """They are only useful as curves, so they have to be in the history.
+
+    The global efficiency is a straight ramp until breakthrough; the swept
+    efficiency is what carries information while the job runs, and it can only
+    show that if it is recorded at every diagnostic step rather than computed
+    once at the end.
+    """
+    from cases.circulation import build, load_caliper
+
+    caliper, _ = load_caliper(synthetic=True, verbose=False)
+    solver, schedule, *_ = build(caliper, n_axial=25, top_depth=0.0,
+                                 rat_hole_length=2.0)
+    h = solver.run(t_end=schedule.total_time, n_snapshots=0).history
+
+    for key in ("interface_length", "swept_efficiency", "interface_front",
+                "interface_back", "reynolds_casing", "reynolds_annulus"):
+        assert key in h and len(h[key]) == len(h["time"])
+
+    swept = np.asarray(h["swept_efficiency"], dtype=float)
+    live = np.isfinite(swept)
+    assert live.sum() > 3
+
+    # The two must meet at the end: once the front is at the top, the swept
+    # region is the whole annulus.
+    assert swept[live][-1] == pytest.approx(h["annular_efficiency"][-1], abs=0.02)
+
+    # And they must differ while the front is still climbing - otherwise the
+    # new measure is not telling us anything the old one did not.
+    early = np.flatnonzero(live)[0]
+    assert swept[early] > h["annular_efficiency"][early] + 0.05

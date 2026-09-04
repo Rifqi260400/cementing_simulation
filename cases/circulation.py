@@ -286,6 +286,23 @@ def main(argv=None) -> None:
     result.arrival.to_csv(arrival_csv)
     print(f"    wrote {arrival_csv}")
 
+    # The efficiency history is a validation curve in its own right - ANSYS
+    # produces the same three against time - so it is exported, not only drawn.
+    hist_csv = OUT / "field_displacement_history.csv"
+    np.savetxt(
+        hist_csv,
+        np.column_stack([
+            h["time"], h["annular_efficiency"], h["swept_efficiency"],
+            h["interface_length"], h["interface_front"], h["interface_back"],
+            h["reynolds_casing"], h["reynolds_annulus"],
+        ]),
+        delimiter=",", comments="", fmt="%.6g",
+        header="time_s,efficiency_global,efficiency_swept,interface_length_m,"
+               "front_20pct_depth_m,back_80pct_depth_m,"
+               "reynolds_casing_max,reynolds_annulus_max",
+    )
+    print(f"    wrote {hist_csv}")
+
     print("\n--- hydraulics at end of job ---")
     print(result.hydraulics.summary())
     ff = h["pump_pressure"] < 0.0

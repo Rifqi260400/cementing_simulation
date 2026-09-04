@@ -6,32 +6,37 @@ of it, and whether it holds depends on the fluid the job is actually pumped
 with.  Nothing in the solver notices when it stops holding, so this module
 computes the Reynolds number and says so.
 
-Why it matters here
--------------------
+Where this stands on this study
+-------------------------------
 Xue et al. (2022), *J. Pet. Sci. Eng.* 208:109393, make the point that in a
 cementing annulus the wide side can be turbulent while the narrow side is still
 laminar, and that assuming one regime everywhere "will lead to serious model
-error".  The regime also changes *during* the job, so it is tracked at every
-diagnostic step and not just read off the end state.  At the end the annulus is
-full of cement and reads laminar; at the start it is full of mud, and if that
-mud is thin, that is when the assumption breaks.  Reporting only the final
-state would report only the comfortable half of the job.
+error".  That is worth checking rather than assuming, so this module checks it.
 
-On the K-GEP-1 geometry the answer depends entirely on the mud:
+**On this job the check passes.**  Both fluids are Herschel-Bulkley and the
+ANSYS comparison will use Herschel-Bulkley too, so the numbers below are the
+ones that matter, not a Newtonian stand-in:
 
-===================================  =========  =========
-fluid                                Re annulus  Re casing
-===================================  =========  =========
-mud as currently assumed                    355        764
-cement slurry                               308        607
-mud taken as water (1 cP)                38 000    107 000
-===================================  =========  =========
+=======  ===========  ==========  ==========  ==========
+rate     v (annulus)  Re ann mud  Re ann cem  Re casing
+=======  ===========  ==========  ==========  ==========
+5 bpm       0.44 m/s         404         412    822-875
+10 bpm      0.87 m/s        1050        1149  2344-2361
+15 bpm      1.31 m/s        1819        2076  4120-4336
+=======  ===========  ==========  ==========  ==========
 
-So with the placeholder mud the laminar profile is sound, and with a
-water-thin mud - which is how the mud on this well has been described - it is
-not.  The regime is reported rather than modelled: a turbulence model is a
-different solver, and quietly running a laminar profile at Re = 38 000 would be
-worse than saying so.
+At the job rate of 5 bpm the annulus sits a factor of five below the laminar
+limit and the casing a factor of about 2.4, so the laminar profile this solver
+integrates is sound for both fluids.  **The casing is what leaves laminar
+first**, at roughly 10 bpm; the annulus holds to about 15-20 bpm.  So the
+assumption is safe here and would need re-checking if the rate were raised, or
+if the displaced fluid turned out to be far thinner than the placeholder mud -
+water at 1 cP would give Re of 38 000 in the annulus, which is where the
+sensitivity ends.
+
+The regime is reported, never modelled: a turbulence model is a different
+solver.  The point of the check is that the assumption is now backed by a
+number that is recomputed on every run instead of being taken on trust.
 
 Definition
 ----------

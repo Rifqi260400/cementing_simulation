@@ -99,7 +99,7 @@ non-UTF8 bytes in a curve description — all handled. Its units come from the
 bottoming out, not geometry. `implausible_tail` finds it; the case cuts it and
 says so. Nothing is trimmed silently — `--keep-tail` leaves it in.
 
-### Is a laminar profile defensible? — and two better efficiency measures
+### The laminar assumption, checked — and two better efficiency measures
 
 ```bash
 .venv/bin/python -m cases.circulation    # both reported in the run output
@@ -111,21 +111,30 @@ horizontal annulus in Fluent and make two points that land on this model.
 **1. Regime.** They find the wide side turbulent while the narrow side is still
 laminar, and warn that assuming one regime everywhere causes "serious model
 error". This solver integrates a **laminar** Herschel–Bulkley profile
-everywhere. Whether that holds depends entirely on the mud, which is not yet
-measured:
+everywhere, so the assumption is worth a number rather than trust.
 
-| mud | peak Re, casing | peak Re, annulus | regime |
+**On this job the check passes.** Both fluids are Herschel–Bulkley, and the
+ANSYS comparison will use Herschel–Bulkley too, so these are the numbers that
+count:
+
+| rate | v, annulus | Re annulus (mud / cement) | Re casing |
 |---|---|---|---|
-| placeholder (`τ₀` 2 Pa, `k` 0.30, `n` 0.72) | 875 | 1305 | laminar — profile sound |
-| **taken as water (1 cP)** | **107 000** | **40 800** | **fully turbulent** |
+| **5 bpm — the job** | 0.44 m/s | **404 / 412** | **822–875** |
+| 10 bpm | 0.87 m/s | 1050 / 1149 | 2344–2361 |
+| 15 bpm | 1.31 m/s | 1819 / 2076 | 4120–4336 |
 
-So if the mud really is as thin as water, the profile this model solves is the
-wrong one. `inpipe/regime.py` computes `Re = ρVD_h/μ_eff` with
-`μ_eff = τ_w/γ̇(τ_w)` from the solver's own constitutive law, tracks it at every
-diagnostic step — the *start* of the job, when the annulus is still all mud, is
-the dangerous moment, not the end — and says so in the run output. The regime
-is **reported, not modelled**: a turbulence model is a different solver, and
-running a laminar profile at Re = 10⁵ silently is worse than either.
+At the job rate the annulus sits a factor of five below the laminar limit of
+2100 and the casing a factor of about 2.4, so the profile this model solves is
+sound for both fluids. **The casing leaves laminar first**, at roughly 10 bpm;
+the annulus holds to about 15–20 bpm. Re-check if the rate is raised, or if the
+displaced fluid turns out far thinner than the placeholder mud — water at 1 cP
+would give Re ≈ 38 000 in the annulus, which is where the sensitivity ends.
+
+`inpipe/regime.py` computes `Re = ρVD_h/μ_eff` with `μ_eff = τ_w/γ̇(τ_w)` from
+the solver's own constitutive law — not a correlation — at every diagnostic
+step, and prints it. It is **reported, never modelled**: a turbulence model is a
+different solver. The point is that the assumption is now backed by a number
+recomputed on every run.
 
 **2. The efficiency curve is nearly information-free while the job runs.**
 Before breakthrough, `η = V_cement/V_annulus` is just pumped volume over
